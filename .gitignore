@@ -1,0 +1,17 @@
+node_modules/
+.next/
+out/
+.env
+.env.local
+.env.*.local
+!.env.example
+npm-debug.log*
+coverage/
+*.tsbuildinfo
+
+# Machine-local agent permissions, not project configuration.
+.claude/settings.local.json
+
+# Saved reader state (XP, digest acknowledgements, visit snapshots).
+data/
+.DS_Store

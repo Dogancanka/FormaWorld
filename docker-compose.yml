@@ -1,0 +1,22 @@
+services:
+  formaworld:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      APS_CLIENT_ID: ${APS_CLIENT_ID:?set APS_CLIENT_ID in .env}
+      APS_CLIENT_SECRET: ${APS_CLIENT_SECRET:?set APS_CLIENT_SECRET in .env}
+      # Must match the callback URL registered on the APS application exactly,
+      # including scheme, host and port.
+      APS_CALLBACK_URL: ${APS_CALLBACK_URL:?set APS_CALLBACK_URL in .env}
+      APS_EXTRA_SCOPES: ${APS_EXTRA_SCOPES:-}
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
+      FORMAWORLD_DATA_DIR: /data
+    volumes:
+      # Saved reader state. Without this the container keeps everyone's level
+      # and visit history only until the next redeploy.
+      - formaworld-data:/data
+    restart: unless-stopped
+
+volumes:
+  formaworld-data:
