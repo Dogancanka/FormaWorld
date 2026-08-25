@@ -928,3 +928,29 @@ scroll at the ends.
 5. Verified in the browser: a left-drag across the world moves it 0px, the same
    drag on the right button moves it 421px, and Escape closes an open panel and
    leaves it closed when pressed again.
+
+## Phase 40 — Controls you can look up
+
+1. The controls were a strip of four hints that faded out ten seconds after
+   arrival and could never be brought back: fine for the reader who happened to
+   be looking, useless for the one who was not, and no help at all now that the
+   mouse buttons have changed meaning. `src/components/world/world-help.tsx`
+   is the same information as a panel that can be opened, closed, and left
+   closed.
+2. It opens by itself on a first visit and never again — closing it is
+   remembered in `localStorage`, so somebody who knows the controls is not shown
+   them daily. The `?` button in the top bar and the `?` key both bring it back.
+   The key handler ignores typing in an input, so it cannot fire while somebody
+   is writing an issue title.
+3. `useState(() => …)` rather than opening it from an effect: the whole canvas is
+   loaded with `ssr: false`, so there is no server render to disagree with, and
+   the lint rule against setting state in an effect body is right to complain.
+4. The faded strip and everything it needed — `hasInteracted`,
+   `InteractionWatcher`, five CSS rules and a keyframe — are gone rather than
+   left sitting next to their replacement.
+5. Removing those rules by regular expression ate a closing brace of a media
+   query and broke the build. Reverted and redone with exact-line matches, then
+   checked by counting braces across the file before rebuilding.
+6. Verified in the browser: shown on a first visit with all six rows, hidden and
+   remembered on close, still hidden after a reload, and brought back by both
+   the button and the key.

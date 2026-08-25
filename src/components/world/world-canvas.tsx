@@ -50,6 +50,7 @@ import { awayEvents, type AwayEvent } from "@/world/progression/away-log";
 import { buildSnapshot } from "@/world/progression/snapshot";
 import { saveVisitSnapshot, useProgression } from "@/world/progression/store";
 import { useWorldAudio } from "@/world/audio/use-world-audio";
+import { WorldHelp, useWorldHelp } from "./world-help";
 import { groupDistrictEntities, isUngrouped } from "@/world/entities/grouping";
 import { recordWebLink } from "@/world/entities/web-link";
 import { openWater, pointClearOfWater, riverCourses, waterBodies, type CompoundRect, type WaterBody } from "@/world/water";
@@ -295,7 +296,6 @@ export default function WorldCanvas({ projects }: { projects: WorldProjectRef[] 
   const [statsOpen, setStatsOpen] = useState(false);
   const [navMenuOpen, setNavMenuOpen] = useState(false);
   const [activityOpen, setActivityOpen] = useState(false);
-  const [hasInteracted, setHasInteracted] = useState(false);
   // Issue activity is diffed per project: one compound's records must never be
   // compared against another's.
   const issueSnapshotRef = useRef<Map<string, WorldEntity[]>>(new Map());
@@ -446,6 +446,7 @@ export default function WorldCanvas({ projects }: { projects: WorldProjectRef[] 
   // own store and survives a reload of the world.
   const progression = useProgression(projectId);
   const audio = useWorldAudio();
+  const help = useWorldHelp();
   // Reset view frames the whole world, which with several projects means every
   // compound and the ground between them.
   const worldBounds = useMemo(() => {
@@ -1084,7 +1085,6 @@ export default function WorldCanvas({ projects }: { projects: WorldProjectRef[] 
         ))}
         <CameraFocus request={focusRequest} controlsRef={controlsRef} zones={zones} positions={renderPositions} minZoom={minZoom} />
         <CameraBounds controlsRef={controlsRef} bounds={worldBounds} margin={PAN_MARGIN} />
-        <InteractionWatcher controlsRef={controlsRef} onInteract={() => setHasInteracted(true)} />
         <MapControls
           ref={controlsRef}
           makeDefault
@@ -1182,6 +1182,16 @@ export default function WorldCanvas({ projects }: { projects: WorldProjectRef[] 
               {digestIsArrival ? "On arrival" : "What happened"} <b>{awayLog.length}</b>
             </button>
           )}
+          <button
+            className={`toolbar-button help-toggle${help.open ? " on" : ""}`}
+            type="button"
+            onClick={help.toggle}
+            aria-pressed={help.open}
+            title="Show the controls"
+            aria-label="Show the controls"
+          >
+            ?
+          </button>
           <button
             className={`toolbar-button sound-toggle${audio.enabled ? " on" : ""}`}
             type="button"
@@ -1297,13 +1307,7 @@ export default function WorldCanvas({ projects }: { projects: WorldProjectRef[] 
 
       <WorldActionBar onResetView={resetView} onCreateIssue={() => setIssueComposer({})} />
 
-      <div className={`world-controls ${hasInteracted ? "faded" : ""}`}>
-        <span><b>Right-drag</b> pan</span>
-        <span><b>Scroll</b> zoom</span>
-        <span><b>Click</b> inspect</span>
-        <span><b>Double-click</b> focus</span>
-        <span><b>Esc</b> deselect</span>
-      </div>
+      <WorldHelp open={help.open} onClose={help.close} />
     </div>
   );
 }
@@ -1602,22 +1606,6 @@ function CameraFocus({
       desiredZoom.current = undefined;
     }
   });
-  return null;
-}
-
-function InteractionWatcher({
-  controlsRef,
-  onInteract,
-}: {
-  controlsRef: RefObject<MapControlsImpl | null>;
-  onInteract: () => void;
-}) {
-  useEffect(() => {
-    const controls = controlsRef.current;
-    if (!controls) return;
-    controls.addEventListener("start", onInteract);
-    return () => controls.removeEventListener("start", onInteract);
-  }, [controlsRef, onInteract]);
   return null;
 }
 
