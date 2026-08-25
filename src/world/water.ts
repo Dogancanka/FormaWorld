@@ -67,6 +67,15 @@ function scaled(range: [number, number], seed: number): number {
   return range[0] + ((seed >>> 7) % 100) / 100 * (range[1] - range[0]);
 }
 
+/**
+ * Ponds inside one compound's walls.
+ *
+ * Open water is *not* placed here. A compound only knows its own geometry, and
+ * scattering water past its own wall from inside that view is what put lakes
+ * across a neighbour's wall and districts as soon as a world held more than one
+ * project. The meadow between compounds belongs to the world, so `openWater`
+ * lays it out once with every compound in view.
+ */
 export function waterBodies(
   bounds: CompoundBounds,
   zones: WorldZone[],
@@ -74,7 +83,6 @@ export function waterBodies(
   paths: GroundPath[],
 ): WaterBody[] {
   const inside: WaterBody[] = [];
-  const outside: WaterBody[] = [];
 
   // Inside the walls the ground is mostly taken by districts and roads, so every
   // candidate that survives the clearance rules is used rather than thinned by a
@@ -93,21 +101,76 @@ export function waterBodies(
     }
   }
 
-  for (let gridX = bounds.minX - OUTSIDE_REACH; gridX <= bounds.maxX + OUTSIDE_REACH && outside.length < MAX_OUTSIDE; gridX += SAMPLE_STEP) {
-    for (let gridZ = bounds.minZ - OUTSIDE_REACH; gridZ <= bounds.maxZ + OUTSIDE_REACH && outside.length < MAX_OUTSIDE; gridZ += SAMPLE_STEP) {
+  return inside;
+}
+
+/** A compound's footprint in world space, wall included. */
+export interface CompoundRect {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+}
+
+function touchesCompound(rect: CompoundRect, x: number, z: number, radius: number): boolean {
+  const clearance = radius + WALL_CLEARANCE;
+  return x > rect.minX - clearance && x < rect.maxX + clearance
+    && z > rect.minZ - clearance && z < rect.maxZ + clearance;
+}
+
+/**
+ * Open water in the meadow, laid out once for the whole world.
+ *
+ * The rule this exists to enforce: no body of water may ever reach a compound.
+ * A pond is kept only when its full radius, plus the wall clearance, clears
+ * *every* compound in the world — not just the one it happens to be nearest.
+ * With several projects side by side the ground between them is shared, so a
+ * per-compound pass could not know what it was about to flood.
+ *
+ * Placement is deterministic from world coordinates, so a compound growing a
+ * district never shuffles the lakes around the reader.
+ */
+export function openWater(compounds: CompoundRect[], reach = OUTSIDE_REACH): WaterBody[] {
+  if (compounds.length === 0) return [];
+  const area = compounds.reduce((total, rect) => ({
+    minX: Math.min(total.minX, rect.minX),
+    maxX: Math.max(total.maxX, rect.maxX),
+    minZ: Math.min(total.minZ, rect.minZ),
+    maxZ: Math.max(total.maxZ, rect.maxZ),
+  }), { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity });
+
+  // Every candidate is collected before any is kept. Taking them in scan order
+  // spends the whole quota on the first corner of a wide world and leaves the
+  // far side dry, which reads as a mistake rather than as a landscape.
+  const candidates: WaterBody[] = [];
+  for (let gridX = area.minX - reach; gridX <= area.maxX + reach; gridX += SAMPLE_STEP) {
+    for (let gridZ = area.minZ - reach; gridZ <= area.maxZ + reach; gridZ += SAMPLE_STEP) {
       const seed = hash(gridX + 0.5, gridZ + 0.5);
       if (seed % 5 !== 0) continue;
       const x = gridX + ((seed % 100) / 100 - 0.5) * SAMPLE_STEP * 0.7;
       const z = gridZ + (((seed >>> 9) % 100) / 100 - 0.5) * SAMPLE_STEP * 0.7;
       const radius = scaled(OUTSIDE_RADIUS, seed);
-      // Open water must clear the outside face of the wall.
-      if (insideWall(bounds, x, z, -(radius + WALL_CLEARANCE))) continue;
-      if (outside.some((body) => Math.hypot(body.center[0] - x, body.center[1] - z) < body.radius + radius + 4)) continue;
-      outside.push({ id: `water-${outside.length}`, center: [x, z], radius, inside: false, seed });
+      if (compounds.some((rect) => touchesCompound(rect, x, z, radius))) continue;
+      candidates.push({ id: "", center: [x, z], radius, inside: false, seed });
     }
   }
 
-  return [...inside, ...outside];
+  // Ordering by the seed rather than by position spreads the kept bodies over
+  // the whole meadow, and is as deterministic as the scan it replaces.
+  candidates.sort((left, right) => left.seed - right.seed || left.center[0] - right.center[0]);
+
+  const limit = MAX_OUTSIDE * Math.min(compounds.length, 4);
+  const bodies: WaterBody[] = [];
+  for (const candidate of candidates) {
+    if (bodies.length >= limit) break;
+    const clash = bodies.some((body) => Math.hypot(
+      body.center[0] - candidate.center[0],
+      body.center[1] - candidate.center[1],
+    ) < body.radius + candidate.radius + 4);
+    if (clash) continue;
+    bodies.push({ ...candidate, id: `water-${bodies.length}` });
+  }
+  return bodies;
 }
 
 /** True when a point is clear of every water body, for scattering props on dry land. */

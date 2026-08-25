@@ -50,7 +50,7 @@ import { awayEvents, type AwayEvent } from "@/world/progression/away-log";
 import { buildSnapshot } from "@/world/progression/snapshot";
 import { saveVisitSnapshot, useProgression } from "@/world/progression/store";
 import { groupDistrictEntities, isUngrouped } from "@/world/entities/grouping";
-import { pointClearOfWater, waterBodies, type WaterBody } from "@/world/water";
+import { openWater, pointClearOfWater, waterBodies, type CompoundRect, type WaterBody } from "@/world/water";
 import { brickTexture, dirtTexture, grassTexture, shingleTexture } from "@/world/visual/textures";
 import { MathUtils, MeshBasicMaterial, Vector3, type Group, type Mesh } from "three";
 import type { MapControls as MapControlsImpl } from "three-stdlib";
@@ -182,6 +182,15 @@ async function executeWorldAction(
   return payload;
 }
 
+/** A compound after layout: its feeds, its districts and where it stands. */
+interface CompoundView {
+  entry: ProjectFeeds;
+  zones: WorldZone[];
+  positions: ZonePositions;
+  bounds: CompoundBounds;
+  offset: [number, number];
+}
+
 /** Everything one compound has read from APS. */
 interface ProjectFeeds {
   project: WorldProjectRef;
@@ -201,6 +210,12 @@ export default function WorldCanvas({ projects }: { projects: WorldProjectRef[] 
   const projectName = primary?.name ?? "";
   const projectId = primary?.id ?? "";
   const [selectedId, setSelectedId] = useState<ZoneId | null>("hub");
+  // A district exists in every compound, so a selection has to name the project
+  // as well. Without it, double-clicking a district on the third compound flew
+  // the camera to the first compound's copy of the same district.
+  const [selectedProjectId, setSelectedProjectId] = useState<string>();
+  /** Set when a whole compound is selected rather than one of its districts. */
+  const [selectedCompoundId, setSelectedCompoundId] = useState<string>();
   const [panelOpen, setPanelOpen] = useState(false);
   // Feeds are held per project, because districts are laid out from a project's
   // own APS asset statuses and each compound has its own wall. Everything that
@@ -358,10 +373,18 @@ export default function WorldCanvas({ projects }: { projects: WorldProjectRef[] 
     return [position[0] + (compound?.offset[0] ?? 0), position[2] + (compound?.offset[1] ?? 0)];
   }, [compounds, renderPositions]);
   const selectedZone = zones.find((zone) => zone.id === selectedId);
+  const selectedCompound = compounds.find(
+    (compound) => compound.entry.project.id === selectedCompoundId,
+  );
   const selectedZoneEntities = useMemo(() => {
-    if (!selectedId || selectedId === "hub") return allEntities;
+    // Narrowed to the compound that was clicked. Without this, opening the
+    // issues district on one project listed every project's issues.
+    const scoped = selectedProjectId
+      ? allEntities.filter((entity) => entity.projectId === selectedProjectId)
+      : allEntities;
+    if (!selectedId || selectedId === "hub") return scoped;
     const kind = zones.find((zone) => zone.id === selectedId)?.kind;
-    return allEntities.filter((entity) => {
+    return scoped.filter((entity) => {
       if (kind === "assets") return entity.type === "asset" && entity.zone === selectedId;
       if (kind === "issues") return entity.type === "issue";
       if (kind === "rfis") return entity.type === "rfi";
@@ -370,15 +393,25 @@ export default function WorldCanvas({ projects }: { projects: WorldProjectRef[] 
       if (kind === "forms") return entity.type === "form";
       return false;
     });
-  }, [allEntities, selectedId, zones]);
+  }, [allEntities, selectedId, selectedProjectId, zones]);
   const selectedZoneKind = zones.find((zone) => zone.id === selectedId)?.kind;
+  /** The feeds the district panel counts against: one compound's, or the world's. */
+  const scopedFeeds = useMemo(() => {
+    const owner = selectedProjectId
+      ? byProject.find((entry) => entry.project.id === selectedProjectId)
+      : undefined;
+    return owner ?? {
+      assets: assetFeed, issues: issueFeed, rfis: rfiFeed,
+      people: peopleFeed, documents: documentFeed, forms: formFeed,
+    };
+  }, [assetFeed, byProject, documentFeed, formFeed, issueFeed, peopleFeed, rfiFeed, selectedProjectId]);
   const selectedZoneTotal = selectedId === "hub"
-    ? [assetFeed?.total, issueFeed?.total, rfiFeed?.total, peopleFeed?.total, documentFeed?.total, formFeed?.total].reduce<number>((sum, total) => sum + (total ?? 0), 0)
-    : selectedZoneKind === "issues" ? issueFeed?.total ?? selectedZoneEntities.length
-      : selectedZoneKind === "rfis" ? rfiFeed?.total ?? selectedZoneEntities.length
-        : selectedZoneKind === "people" ? peopleFeed?.total ?? selectedZoneEntities.length
-          : selectedZoneKind === "documents" ? documentFeed?.total ?? selectedZoneEntities.length
-            : selectedZoneKind === "forms" ? formFeed?.total ?? selectedZoneEntities.length
+    ? [scopedFeeds.assets?.total, scopedFeeds.issues?.total, scopedFeeds.rfis?.total, scopedFeeds.people?.total, scopedFeeds.documents?.total, scopedFeeds.forms?.total].reduce<number>((sum, total) => sum + (total ?? 0), 0)
+    : selectedZoneKind === "issues" ? scopedFeeds.issues?.total ?? selectedZoneEntities.length
+      : selectedZoneKind === "rfis" ? scopedFeeds.rfis?.total ?? selectedZoneEntities.length
+        : selectedZoneKind === "people" ? scopedFeeds.people?.total ?? selectedZoneEntities.length
+          : selectedZoneKind === "documents" ? scopedFeeds.documents?.total ?? selectedZoneEntities.length
+            : selectedZoneKind === "forms" ? scopedFeeds.forms?.total ?? selectedZoneEntities.length
               : selectedZoneEntities.length;
   const worldTotal = [assetFeed?.total, issueFeed?.total, rfiFeed?.total, peopleFeed?.total, documentFeed?.total, formFeed?.total]
     .reduce<number>((sum, total) => sum + (total ?? 0), 0);
@@ -414,6 +447,19 @@ export default function WorldCanvas({ projects }: { projects: WorldProjectRef[] 
    * exactly on the edge of the frame reads as a compound running off the
    * screen, so the fit is given a margin of open ground on every side.
    */
+  /**
+   * Every compound's footprint in world space. Water and meadow scatter are
+   * placed against this list, so nothing in the open ground can ever land on a
+   * compound — including the one standing next door.
+   */
+  const compoundRects = useMemo<CompoundRect[]>(() => compounds.map((compound) => ({
+    minX: compound.bounds.minX + compound.offset[0],
+    maxX: compound.bounds.maxX + compound.offset[0],
+    minZ: compound.bounds.minZ + compound.offset[1],
+    maxZ: compound.bounds.maxZ + compound.offset[1],
+  })), [compounds]);
+  const meadowWater = useMemo(() => openWater(compoundRects), [compoundRects]);
+
   const minZoom = useMemo(
     () => Math.max(4, 12 / Math.sqrt(Math.max(1, compounds.length))),
     [compounds.length],
@@ -527,18 +573,54 @@ export default function WorldCanvas({ projects }: { projects: WorldProjectRef[] 
     setActivityOpen((open) => !open);
   };
 
-  const selectZone = (id: ZoneId) => {
+  const selectZone = (id: ZoneId, ownerId?: string) => {
     setRevealed(undefined);
     setSelectedId(id);
+    setSelectedProjectId(ownerId);
+    setSelectedCompoundId(undefined);
     setSelectedEntityId(undefined);
     setRelationshipFocusEntityId(undefined);
     setPanelOpen(true);
   };
 
-  const focusZone = (id: ZoneId) => {
-    selectZone(id);
-    setFocusRequest({ zoneId: id, serial: Date.now() });
+  const focusZone = (id: ZoneId, ownerId?: string) => {
+    selectZone(id, ownerId);
+    setFocusRequest({
+      zoneId: id,
+      serial: Date.now(),
+      projectId: ownerId,
+      target: zoneWorldTarget(id, ownerId),
+    });
   };
+
+  /** Frame one whole compound, the way focusing a district frames a district. */
+  const focusCompound = useCallback((ownerId: string) => {
+    const compound = compounds.find((candidate) => candidate.entry.project.id === ownerId);
+    if (!compound) return;
+    setFocusRequest({
+      zoneId: "hub",
+      serial: Date.now(),
+      projectId: ownerId,
+      target: [
+        (compound.bounds.minX + compound.bounds.maxX) / 2 + compound.offset[0],
+        (compound.bounds.minZ + compound.bounds.maxZ) / 2 + compound.offset[1],
+      ],
+      fit: [
+        compound.bounds.maxX - compound.bounds.minX + 6,
+        compound.bounds.maxZ - compound.bounds.minZ + 6,
+      ],
+    });
+  }, [compounds]);
+
+  const selectCompound = useCallback((ownerId: string) => {
+    setRevealed(undefined);
+    setSelectedId(null);
+    setSelectedProjectId(ownerId);
+    setSelectedCompoundId(ownerId);
+    setSelectedEntityId(undefined);
+    setRelationshipFocusEntityId(undefined);
+    setPanelOpen(true);
+  }, []);
 
   const locateEntity = (entity: WorldEntity) => {
     setSelectedEntityId(entity.id);
@@ -780,7 +862,7 @@ export default function WorldCanvas({ projects }: { projects: WorldProjectRef[] 
         shadows
         dpr={[1, 1.75]}
         camera={{ position: [22, 26, 22], zoom: 19, near: -1200, far: 1200 }}
-        onPointerMissed={() => { setSelectedId(null); setRevealed(undefined); }}
+        onPointerMissed={() => { setSelectedId(null); setSelectedCompoundId(undefined); setSelectedProjectId(undefined); setRevealed(undefined); }}
         gl={{ antialias: true, alpha: false }}
       >
         {/* The clip range is symmetric and negative on the near side. An
@@ -808,18 +890,29 @@ export default function WorldCanvas({ projects }: { projects: WorldProjectRef[] 
         {/* The ground is one plane under every compound, so it is drawn here
             rather than once per project. */}
         <GroundPlane />
+        <WaterBodies bodies={meadowWater} />
+        <MeadowProps compounds={compoundRects} water={meadowWater} />
         {compounds.map((compound) => (
           <group
             key={compound.entry.project.id}
             position={[compound.offset[0], 0, compound.offset[1]]}
           >
+            <CompoundPlate
+              bounds={compound.bounds}
+              selected={selectedCompoundId === compound.entry.project.id}
+              onSelect={() => selectCompound(compound.entry.project.id)}
+              onFocus={() => { selectCompound(compound.entry.project.id); focusCompound(compound.entry.project.id); }}
+            />
             <CompoundLabel
               name={compound.entry.project.name}
               bounds={compound.bounds}
               visible={compounds.length > 1}
+              selected={selectedCompoundId === compound.entry.project.id}
             />
             <WorldScene
+              projectId={compound.entry.project.id}
               selectedId={selectedId}
+              selectedProjectId={selectedProjectId}
               positions={compound.positions}
               zones={compound.zones}
               onSelect={selectZone}
@@ -1029,6 +1122,13 @@ export default function WorldCanvas({ projects }: { projects: WorldProjectRef[] 
               : selectedEntity.type === "form"
                 ? <FormDetail entity={selectedEntity} projectName={projectName} actionSection={<WorldActionSection key={selectedEntity.id} entity={selectedEntity} onCompleted={reconcileMutatedEntity} />} relationshipSection={<RelationshipSection related={selectedRelationships} assetCategories={assetCategories} onLocate={locateEntity} />} onClose={() => setPanelOpen(false)} />
             : <AssetDetail entity={selectedEntity} projectName={projectName} actionSection={<><WorldActionSection key={selectedEntity.id} entity={selectedEntity} onCompleted={reconcileMutatedEntity} /><CreateIssueAction onClick={() => setIssueComposer({ context: selectedEntity })} /></>} relationshipSection={<RelationshipSection related={selectedRelationships} assetCategories={assetCategories} onLocate={locateEntity} />} onClose={() => setPanelOpen(false)} />
+      ) : selectedCompound && panelOpen ? (
+        <CompoundDetail
+          compound={selectedCompound}
+          onFocus={() => focusCompound(selectedCompound.entry.project.id)}
+          onOpenDistrict={(zoneId) => focusZone(zoneId, selectedCompound.entry.project.id)}
+          onClose={() => { setPanelOpen(false); setSelectedCompoundId(undefined); }}
+        />
       ) : selectedZone && panelOpen && (
         <ZoneDetail
           zone={selectedZone}
@@ -1039,7 +1139,7 @@ export default function WorldCanvas({ projects }: { projects: WorldProjectRef[] 
             ? { headline: revealed.headline, ids: revealedIds ?? new Set(), onClear: () => setRevealed(undefined) }
             : undefined}
           total={selectedZoneTotal}
-          projectName={projectName}
+          projectName={compounds.find((compound) => compound.entry.project.id === selectedProjectId)?.entry.project.name ?? projectName}
           projectId={projectId}
           onLocate={locateEntity}
           onClose={() => setPanelOpen(false)}
@@ -1156,14 +1256,189 @@ function ActivityLog({
  * already says which project this is, and inert to the pointer like every other
  * overlay in the scene.
  */
+/**
+ * The meadow between and around the compounds.
+ *
+ * Laid out once for the whole world so nothing is scattered onto a compound —
+ * a per-compound ring could only see its own wall, and reached further than the
+ * gap between two projects, which put trees inside a neighbour's districts.
+ */
+function MeadowProps({
+  compounds,
+  water,
+}: {
+  compounds: CompoundRect[];
+  water: WaterBody[];
+}) {
+  const spots = useMemo(() => {
+    if (compounds.length === 0) return [];
+    const area = compounds.reduce((total, rect) => ({
+      minX: Math.min(total.minX, rect.minX),
+      maxX: Math.max(total.maxX, rect.maxX),
+      minZ: Math.min(total.minZ, rect.minZ),
+      maxZ: Math.max(total.maxZ, rect.maxZ),
+    }), { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity });
+    const clear = (x: number, z: number) => compounds.every((rect) =>
+      x < rect.minX - 1.2 || x > rect.maxX + 1.2 || z < rect.minZ - 1.2 || z > rect.maxZ + 1.2);
+
+    const result: { position: [number, number]; seed: number }[] = [];
+    const reach = 14;
+    for (let gridX = area.minX - reach; gridX <= area.maxX + reach; gridX += 3.2) {
+      for (let gridZ = area.minZ - reach; gridZ <= area.maxZ + reach; gridZ += 3.2) {
+        const seed = hashText(`meadow:${Math.round(gridX * 10)}:${Math.round(gridZ * 10)}`);
+        if (seed % 2 !== 0) continue;
+        const x = gridX + ((seed % 100) / 100 - .5) * 2.4;
+        const z = gridZ + (((seed >>> 8) % 100) / 100 - .5) * 2.4;
+        if (!clear(x, z)) continue;
+        if (!pointClearOfWater(water, x, z, .8)) continue;
+        result.push({ position: [x, z], seed });
+      }
+    }
+    return result.slice(0, 140);
+  }, [compounds, water]);
+
+  return <>{spots.map(({ position, seed }) => (
+    <GroundProp key={`meadow:${position[0]}:${position[1]}`} position={[position[0], 0, position[1]]} seed={seed} />
+  ))}</>;
+}
+
+/**
+ * The whole compound as a click target, so a project behaves like a district:
+ * one click selects it and opens its panel, a double-click frames it.
+ *
+ * It is the lowest thing in the compound and paints nothing, so a district, a
+ * record or a wall standing on it is always hit first. The handler acts only
+ * when the plate is the *nearest* intersection, which is what keeps it from
+ * stealing a click meant for a cone or a crate above it.
+ */
+/**
+ * One whole project's panel, the counterpart to a district's.
+ *
+ * A world holding several compounds needs a way to ask "what is this project?"
+ * without first picking one of its districts. It reports only what that
+ * compound's own feeds returned, so the numbers can never borrow from the
+ * project standing next to it, and each district row opens the real district.
+ */
+function CompoundDetail({
+  compound,
+  onFocus,
+  onOpenDistrict,
+  onClose,
+}: {
+  compound: CompoundView;
+  onFocus: () => void;
+  onOpenDistrict: (zoneId: ZoneId) => void;
+  onClose: () => void;
+}) {
+  const { entry, zones } = compound;
+  const feeds: Array<{ label: string; feed?: { state: string; total: number; entities: unknown[]; error?: string }; zoneId: ZoneId }> = [
+    { label: "Assets", feed: entry.assets, zoneId: ASSET_ZONE },
+    { label: "Issues", feed: entry.issues, zoneId: "issues" },
+    { label: "RFIs", feed: entry.rfis, zoneId: "rfis" },
+    { label: "People", feed: entry.people, zoneId: "people" },
+    { label: "Documents", feed: entry.documents, zoneId: "documents" },
+    { label: "Forms", feed: entry.forms, zoneId: "forms" },
+  ];
+  const total = feeds.reduce((sum, row) => sum + (row.feed?.total ?? 0), 0);
+  const failing = feeds.filter((row) => row.feed?.error);
+
+  return (
+    <aside className="world-detail compound-detail" aria-live="polite">
+      <button className="detail-close" type="button" onClick={onClose} aria-label="Close project panel">×</button>
+      <span className="detail-kicker">LIVE PROJECT</span>
+      <h2>{entry.project.name}</h2>
+      {entry.project.hubName && <p>{entry.project.hubName}</p>}
+      <div className="zone-content-summary">
+        <strong>{total}</strong>
+        <span>{total === 1 ? "project record" : "project records"}</span>
+        <small>Across {zones.length} districts in this compound</small>
+      </div>
+      <section className="zone-content-list" aria-label={`${entry.project.name} districts`}>
+        <header><span>IN THIS PROJECT</span><b>{feeds.filter((row) => row.feed).length}</b></header>
+        {feeds.map((row) => (
+          <button
+            className="compound-district-row"
+            key={row.label}
+            type="button"
+            onClick={() => onOpenDistrict(row.zoneId)}
+            disabled={!row.feed}
+          >
+            <span>{row.label}</span>
+            <b>{row.feed ? row.feed.total : "—"}</b>
+            <small>
+              {!row.feed
+                ? "loading"
+                : row.feed.error
+                  ? "unavailable"
+                  : `${row.feed.entities.length} loaded`}
+            </small>
+          </button>
+        ))}
+      </section>
+      {failing.length > 0 && (
+        <p className="compound-detail-note">
+          {failing.map((row) => row.label).join(", ")} could not be read for this project.
+          The other districts are unaffected.
+        </p>
+      )}
+      <div className="detail-actions">
+        <button className="detail-action" type="button" onClick={onFocus}>Frame this project</button>
+      </div>
+    </aside>
+  );
+}
+
+function CompoundPlate({
+  bounds,
+  selected,
+  onSelect,
+  onFocus,
+}: {
+  bounds: CompoundBounds;
+  selected: boolean;
+  onSelect: () => void;
+  onFocus: () => void;
+}) {
+  const width = bounds.maxX - bounds.minX;
+  const depth = bounds.maxZ - bounds.minZ;
+  const nearest = (event: { intersections: Array<{ object: unknown }>; object: unknown }) =>
+    event.intersections[0]?.object === event.object;
+  return (
+    <mesh
+      position={[(bounds.minX + bounds.maxX) / 2, 0.0015, (bounds.minZ + bounds.maxZ) / 2]}
+      rotation={[-Math.PI / 2, 0, 0]}
+      onClick={(event) => {
+        if (!nearest(event)) return;
+        event.stopPropagation();
+        onSelect();
+      }}
+      onDoubleClick={(event) => {
+        if (!nearest(event)) return;
+        event.stopPropagation();
+        onFocus();
+      }}
+    >
+      <planeGeometry args={[width, depth]} />
+      <meshBasicMaterial
+        color="#d8ef78"
+        transparent
+        opacity={selected ? 0.14 : 0}
+        depthWrite={false}
+      />
+    </mesh>
+  );
+}
+
 function CompoundLabel({
   name,
   bounds,
   visible,
+  selected,
 }: {
   name: string;
   bounds: CompoundBounds;
   visible: boolean;
+  selected: boolean;
 }) {
   if (!visible) return null;
   return (
@@ -1173,7 +1448,11 @@ function CompoundLabel({
       zIndexRange={[20, 0]}
       style={{ pointerEvents: "none" }}
     >
-      <span className="compound-label">{name}</span>
+      {/* Inert, like every other overlay in the scene. It hangs off the front of
+          its compound, which at overview zoom can put it over the compound
+          behind — as a click target it would hand the pointer to the wrong
+          project. The compound's own ground is the target instead. */}
+      <span className={`compound-label${selected ? " selected" : ""}`}>{name}</span>
     </Html>
   );
 }
@@ -1265,7 +1544,9 @@ function InteractionWatcher({
 }
 
 function WorldScene({
+  projectId,
   selectedId,
+  selectedProjectId,
   positions,
   zones,
   onSelect,
@@ -1290,11 +1571,15 @@ function WorldScene({
   onDocumentSelect,
   onFormSelect,
 }: {
+  /** Which compound this scene is, so a click can say where it happened. */
+  projectId: string;
   selectedId: ZoneId | null;
+  /** The compound the selected district belongs to. */
+  selectedProjectId?: string;
   positions: ZonePositions;
   zones: WorldZone[];
-  onSelect: (id: ZoneId) => void;
-  onFocus: (id: ZoneId) => void;
+  onSelect: (id: ZoneId, projectId: string) => void;
+  onFocus: (id: ZoneId, projectId: string) => void;
   assets: WorldEntity[];
   assetCategories: AssetCategoryOption[];
   assetYard: AssetYardPlan<WorldEntity>;
@@ -1349,9 +1634,11 @@ function WorldScene({
           key={zone.id}
           zone={zone}
           position={positions[zone.id]}
-          selected={selectedId === zone.id}
-          onSelect={onSelect}
-          onFocus={onFocus}
+          // Every compound has an "issues" district. Only the one in the
+          // compound that was clicked is the selected one.
+          selected={selectedId === zone.id && (selectedProjectId === undefined || selectedProjectId === projectId)}
+          onSelect={(id) => onSelect(id, projectId)}
+          onFocus={(id) => onFocus(id, projectId)}
         />
       ))}
       {wireAnchorId && (
@@ -1449,24 +1736,23 @@ function AmbientGroundProps({
       && z > bounds.minZ + inset
       && z < bounds.maxZ - inset;
     const result: { position: [number, number]; seed: number }[] = [];
-    for (let gridX = bounds.minX - 12; gridX <= bounds.maxX + 12; gridX += 3.2) {
-      for (let gridZ = bounds.minZ - 12; gridZ <= bounds.maxZ + 12; gridZ += 3.2) {
+    // Only the ground inside this compound's own wall. The meadow beyond it is
+    // shared with whatever compound stands next door, so it is scattered once at
+    // world level instead of by each compound reaching past its own wall.
+    for (let gridX = bounds.minX; gridX <= bounds.maxX; gridX += 3.2) {
+      for (let gridZ = bounds.minZ; gridZ <= bounds.maxZ; gridZ += 3.2) {
         const seed = hashText(`${Math.round(gridX * 10)}:${Math.round(gridZ * 10)}`);
         const x = gridX + ((seed % 100) / 100 - .5) * 2.4;
         const z = gridZ + (((seed >>> 8) % 100) / 100 - .5) * 2.4;
         // The wall walkway itself stays clear so nothing grows through the stone.
-        if (insideWall(x, z, -1.4) && !insideWall(x, z, 1.6)) continue;
+        if (!insideWall(x, z, 1.6)) continue;
         // Nothing is scattered into the water.
         if (!pointClearOfWater(water, x, z, .8)) continue;
-        if (insideWall(x, z, 1.6)) {
-          if (seed % 3 !== 0 || !clearOfZones(x, z) || !pointClearOfPaths(paths, x, z, .7)) continue;
-        } else if (seed % 2 !== 0) {
-          continue;
-        }
+        if (seed % 3 !== 0 || !clearOfZones(x, z) || !pointClearOfPaths(paths, x, z, .7)) continue;
         result.push({ position: [x, z], seed });
       }
     }
-    return result.slice(0, 96);
+    return result.slice(0, 48);
   }, [zones, positions, bounds, paths, water]);
   return <>{spots.map(({ position, seed }) => (
     <GroundProp key={`${position[0]}:${position[1]}`} position={[position[0], 0, position[1]]} seed={seed} />

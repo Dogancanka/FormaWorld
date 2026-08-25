@@ -677,3 +677,39 @@ still opts out of raycasting through `ignoreRaycast`.
 8. Camera focus carries the compound it means. Flying to a record, or to a
    digest line's district, resolves the position through that project's offset
    instead of landing on the primary project's copy of the same district.
+
+## Phase 31 — Water that respects a neighbour, and compounds you can click
+
+1. Open water was placed per compound and reached 24 units past its own wall,
+   while `COMPOUND_GAP` is 9. With one project that was open meadow; with
+   several it put lakes across a neighbour's wall and inside its districts,
+   because a compound computing its own scenery cannot see the compound standing
+   next door. `waterBodies` now returns only the ponds inside one wall, and
+   `openWater` lays out the meadow once for the whole world: a body is kept only
+   when its full radius plus the wall clearance clears *every* compound. Six
+   tests, including the rule itself against a three-compound world.
+2. The same fault in the scatter: the meadow ring reached 12 units past a wall.
+   The per-compound scatter is now strictly inside its own wall, and `MeadowProps`
+   fills the shared ground once, skipping anything within 1.2 units of any
+   compound.
+3. Candidates for open water were kept in scan order, which spent the whole
+   quota on the first corner of a wide world and left the far side dry. They are
+   collected first and ordered by seed, which spreads them and is exactly as
+   deterministic as the scan it replaced.
+4. Double-clicking a district on the third compound flew the camera to the first
+   compound's copy of it. A district exists in every compound, so selection now
+   names the project as well: `WorldScene` knows which compound it is, `Zone`
+   reports it, and `focusZone` resolves the target through that compound's
+   offset. The district panel is scoped the same way — opening Issues on one
+   project used to list every project's issues, and its totals came from the
+   merged feed.
+5. A project is now a first-class thing to click, like a district.
+   `CompoundPlate` is an invisible plate over each compound's footprint that
+   acts only when it is the *nearest* intersection, so a cone or a crate above it
+   always wins the click. One click selects the project and opens `CompoundDetail`
+   — that compound's own totals, a row per district that opens it, and an honest
+   note naming any module APS refused for this project. A double-click frames it.
+6. The name plate was briefly a button. It hangs off the front of its compound,
+   which at overview zoom puts it over the compound *behind*, so clicking one
+   project's label selected another's. Found by clicking it in the browser. It
+   is inert again, like every other overlay in the scene.

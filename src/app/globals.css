@@ -727,3 +727,43 @@ h1 { margin: 18px 0; font-family: var(--font-satoshi), ui-sans-serif, sans-serif
 
 .project-set { list-style: none; margin: 14px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
 .project-set li { padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); font-size: 13px; }
+
+/* One project's panel, alongside the district and record panels. */
+.compound-detail .zone-content-list { max-height: none; }
+.compound-district-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.compound-district-row:hover:not(:disabled) { background: rgba(34, 105, 88, .09); }
+.compound-district-row:disabled { opacity: .45; cursor: default; }
+.compound-district-row > span { flex: 1 1 auto; min-width: 0; }
+.compound-district-row b { flex: none; font-size: 15px; font-variant-numeric: tabular-nums; }
+.compound-district-row small { flex: none; color: var(--muted); font-size: 11px; white-space: nowrap; }
+.compound-detail .detail-actions { margin-top: 16px; }
+.compound-detail .detail-action {
+  width: 100%;
+  padding: 11px 16px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--green);
+  color: white;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.compound-detail .detail-action:hover { background: var(--green-dark); }
+.compound-detail-note { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 12px 0 0; }
+.compound-label.selected {
+  border-color: var(--green);
+  box-shadow: 0 0 0 2px rgba(34, 105, 88, .28), 0 6px 18px rgba(21, 33, 29, .12);
+}

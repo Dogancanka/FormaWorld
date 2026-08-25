@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { compoundBounds, compoundGates, districtPaths } from "./compound";
 import { zonePositions } from "./layout";
-import { WATER_BANK_WIDTH, pointClearOfWater, waterBankOutline, waterBodies, waterOutline } from "./water";
+import { WATER_BANK_WIDTH, openWater, pointClearOfWater, waterBankOutline, waterBodies, waterOutline, type CompoundRect } from "./water";
 import { worldZones } from "./zones";
 
 const zones = worldZones([32.2, 9.4]);
@@ -12,9 +12,12 @@ const paths = districtPaths(zones, positions, gates, bounds);
 const bodies = waterBodies(bounds, zones, positions, paths);
 
 describe("waterBodies", () => {
-  it("puts water both inside the walls and out in the meadow", () => {
+  it("puts ponds inside the walls and leaves the meadow to the world", () => {
+    // Open water is laid out once for the whole world by `openWater`. A
+    // compound scattering past its own wall could not see the compound standing
+    // next door, and put lakes across its wall and districts.
     expect(bodies.some((body) => body.inside)).toBe(true);
-    expect(bodies.some((body) => !body.inside)).toBe(true);
+    expect(bodies.every((body) => body.inside)).toBe(true);
   });
 
   it("never floods a district", () => {
@@ -135,5 +138,59 @@ describe("waterOutline", () => {
 
   it("is stable for the same body", () => {
     expect(waterOutline(bodies[0])).toEqual(waterOutline(bodies[0]));
+  });
+});
+
+describe("openWater", () => {
+  // Two compounds laid out the way placeCompounds arranges them: side by side
+  // with a gap of open ground between.
+  const left: CompoundRect = { minX: -46, maxX: -4, minZ: -20, maxZ: 20 };
+  const right: CompoundRect = { minX: 4, maxX: 46, minZ: -20, maxZ: 20 };
+  const below: CompoundRect = { minX: -46, maxX: -4, minZ: 30, maxZ: 70 };
+  const world = openWater([left, right, below]);
+
+  function touches(rect: CompoundRect, body: { center: [number, number]; radius: number }): boolean {
+    return body.center[0] + body.radius > rect.minX
+      && body.center[0] - body.radius < rect.maxX
+      && body.center[1] + body.radius > rect.minZ
+      && body.center[1] - body.radius < rect.maxZ;
+  }
+
+  it("never reaches any compound in the world", () => {
+    // The rule. A pond that crosses a wall floods districts belonging to a
+    // project the pond knows nothing about.
+    for (const body of world) {
+      for (const [name, rect] of [["left", left], ["right", right], ["below", below]] as const) {
+        expect(touches(rect, body), `${body.id} reaches the ${name} compound`).toBe(false);
+      }
+    }
+  });
+
+  it("still fills the meadow with something", () => {
+    expect(world.length).toBeGreaterThan(0);
+    expect(world.every((body) => !body.inside)).toBe(true);
+  });
+
+  it("never overlaps another body", () => {
+    for (const first of world) {
+      for (const second of world) {
+        if (first.id === second.id) continue;
+        const distance = Math.hypot(first.center[0] - second.center[0], first.center[1] - second.center[1]);
+        expect(distance, `${first.id} overlaps ${second.id}`).toBeGreaterThan(first.radius + second.radius);
+      }
+    }
+  });
+
+  it("is deterministic, so a growing district never moves the lakes", () => {
+    expect(openWater([left, right, below])).toEqual(world);
+  });
+
+  it("says nothing about a world with no compounds", () => {
+    expect(openWater([])).toEqual([]);
+  });
+
+  it("scales its count with the number of compounds rather than flooding them", () => {
+    expect(openWater([left]).length).toBeLessThanOrEqual(world.length);
+    expect(world.length).toBeLessThanOrEqual(24);
   });
 });
