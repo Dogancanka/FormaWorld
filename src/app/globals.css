@@ -440,7 +440,11 @@ h1 { margin: 18px 0; font-family: var(--font-satoshi), ui-sans-serif, sans-serif
 .activity-list button small { color: #7c8983; font-size: 8px; }
 
 /* Readability pass: HUD and dialog text must remain legible over the 3D world. */
-.world-detail { z-index: 8; width: min(390px, calc(100vw - 48px)); max-height: calc(100vh - 140px); overflow-y: auto; padding: 28px; }
+/* The panel hangs 98px down inside .world-shell, which itself starts below the
+   76px site header. Measuring its height against the viewport instead of
+   against its own container left it running 34px past the bottom of the screen;
+   a percentage resolves against the shell and is right at every window size. */
+.world-detail { z-index: 8; width: min(390px, calc(100vw - 48px)); max-height: calc(100% - 122px); overflow-y: auto; overscroll-behavior: contain; padding: 28px; }
 .detail-kicker { font-size: 9px; }
 .world-detail h2 { font-size: 28px; }
 .world-detail > p { font-size: 13px; }

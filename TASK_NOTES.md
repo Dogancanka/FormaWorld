@@ -869,3 +869,18 @@ Measured against a production build, six projects, 1600x780.
    candidate *furthest* from every compound, which parked it at the edge of the
    reach where the fog swallowed it and the world looked as though it had no
    lake at all.
+
+## Phase 37 — The inspector fitted to its window
+
+The right-hand panel ran off the bottom of the screen. Its `max-height` was
+measured against the viewport (`100vh - 140px`) while the panel itself hangs
+98px down inside `.world-shell`, which starts below the 76px site header — so it
+began at 174px and was allowed to be tall enough to end 34px past the bottom of
+the window, at every window size.
+
+A percentage resolves against the shell instead, which is the box it actually
+lives in: `calc(100% - 122px)`. Measured at four window heights, the panel now
+ends 24 units above the bottom edge (8 on a short window, where the page's own
+`min-height` takes over) and scrolls internally once its content is longer than
+that. `overscroll-behavior: contain` keeps that scroll from turning into a page
+scroll at the ends.
