@@ -730,7 +730,10 @@ h1 { margin: 18px 0; font-family: var(--font-satoshi), ui-sans-serif, sans-serif
 
 /* One project's panel, alongside the district and record panels. */
 .compound-detail .zone-content-list { max-height: none; }
-.compound-district-row {
+/* `.zone-content-list > button` sets a three-column grid for record rows, and
+   it out-specifies a bare class — which put the district name in the 30px icon
+   column and the count on top of it. */
+.zone-content-list > button.compound-district-row {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
@@ -744,11 +747,11 @@ h1 { margin: 18px 0; font-family: var(--font-satoshi), ui-sans-serif, sans-serif
   text-align: left;
   cursor: pointer;
 }
-.compound-district-row:hover:not(:disabled) { background: rgba(34, 105, 88, .09); }
-.compound-district-row:disabled { opacity: .45; cursor: default; }
-.compound-district-row > span { flex: 1 1 auto; min-width: 0; }
-.compound-district-row b { flex: none; font-size: 15px; font-variant-numeric: tabular-nums; }
-.compound-district-row small { flex: none; color: var(--muted); font-size: 11px; white-space: nowrap; }
+.zone-content-list > button.compound-district-row:hover:not(:disabled) { background: rgba(34, 105, 88, .09); }
+.zone-content-list > button.compound-district-row:disabled { opacity: .45; cursor: default; }
+.zone-content-list > button.compound-district-row > span { flex: 1 1 auto; min-width: 0; }
+.zone-content-list > button.compound-district-row b { flex: none; font-size: 15px; font-variant-numeric: tabular-nums; }
+.zone-content-list > button.compound-district-row small { flex: none; color: var(--muted); font-size: 11px; white-space: nowrap; }
 .compound-detail .detail-actions { margin-top: 16px; }
 .compound-detail .detail-action {
   width: 100%;
@@ -767,3 +770,8 @@ h1 { margin: 18px 0; font-family: var(--font-satoshi), ui-sans-serif, sans-serif
   border-color: var(--green);
   box-shadow: 0 0 0 2px rgba(34, 105, 88, .28), 0 6px 18px rgba(21, 33, 29, .12);
 }
+
+/* World sound switch. Off is the resting state, so the "on" look is the one
+   that has to read as active. */
+.sound-toggle { font-size: 13px; line-height: 1; }
+.sound-toggle.on { background: rgba(34, 105, 88, .14); color: var(--green-dark); }

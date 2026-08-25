@@ -745,3 +745,36 @@ Measured against a production build, six projects, 1600x780.
 6. Not done, and the next thing to reach for if the world grows past six
    compounds: instancing the scattered props. They are the bulk of the draw
    calls, and they are identical apart from transform and tint.
+
+## Phase 33 — Relationship wires that reach RFIs, and a world you can hear
+
+1. "Locate all" on a person zoomed out to nothing. It read the people and issue
+   district centres off `renderPositions`, which is the *primary* compound's
+   layout with no offset, so in a multi-project world it aimed at another
+   project's crew camp and sized the zoom from the wrong distance. It resolves
+   both districts through the owning compound now, and frames the box that holds
+   them instead of guessing a zoom from the distance between two centres.
+2. RFIs were missing from `buildEntityPositionMap` entirely. A wire needs a real
+   position for both ends, so no relationship touching an RFI could ever be
+   drawn however well APS had resolved it. They are laid out there with the same
+   grid `RfiEntities` draws with, so a wire lands on the board rather than near
+   it.
+3. Wires were anchored only on a selected *issue*, which left an RFI, an asset
+   or a form showing verified relationships in its panel with nothing drawn in
+   the world to match. Any selected record anchors them now. The existing filter
+   still only draws a link whose two endpoints both have a position in this
+   compound, so nothing is guessed and cross-compound wires cannot appear.
+4. The compound panel's district rows had the name and the count on top of each
+   other. `.zone-content-list > button` sets a three-column grid for record rows
+   and out-specifies a bare class, so the district name was being placed in the
+   30px icon column. The rows are selected with the full path now.
+5. `src/world/audio/` is the world's sound, synthesised rather than shipped: a
+   brown-noise wind bed under a slow two-chord pad, plus six short interface
+   tones. No audio files — a site loop and a music bed would be megabytes in the
+   repository for something most readers will switch off, and oscillators cost
+   nothing. Two rules: silent until asked (a work tool that makes noise on load
+   is one people close), and quiet enough to leave on.
+6. Restoring a saved "on" preference builds the graph into a context the browser
+   has suspended, because audio cannot start before a gesture. It would have
+   left a returning reader in silence until they toggled twice. The first
+   pointer or key event resumes it.

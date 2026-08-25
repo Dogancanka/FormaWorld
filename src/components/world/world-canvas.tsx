@@ -49,6 +49,7 @@ import { WorldActionBar } from "./world-actionbar";
 import { awayEvents, type AwayEvent } from "@/world/progression/away-log";
 import { buildSnapshot } from "@/world/progression/snapshot";
 import { saveVisitSnapshot, useProgression } from "@/world/progression/store";
+import { useWorldAudio } from "@/world/audio/use-world-audio";
 import { groupDistrictEntities, isUngrouped } from "@/world/entities/grouping";
 import { openWater, pointClearOfWater, waterBodies, type CompoundRect, type WaterBody } from "@/world/water";
 import type { WorldSnapshotResponse as WorldSnapshot } from "@/app/api/world/snapshot/route";
@@ -424,6 +425,7 @@ export default function WorldCanvas({ projects }: { projects: WorldProjectRef[] 
   // Progress belongs to the reader, not to the project data, so it lives in its
   // own store and survives a reload of the world.
   const progression = useProgression(projectId);
+  const audio = useWorldAudio();
   // Reset view frames the whole world, which with several projects means every
   // compound and the ground between them.
   const worldBounds = useMemo(() => {
@@ -566,6 +568,7 @@ export default function WorldCanvas({ projects }: { projects: WorldProjectRef[] 
 
   const acknowledgeAway = (event: AwayEvent) => {
     if (revealed?.id === event.id) setRevealed(undefined);
+    audio.play("reward");
     progression.acknowledge(event.id, event.xp);
   };
 
@@ -583,6 +586,7 @@ export default function WorldCanvas({ projects }: { projects: WorldProjectRef[] 
   };
 
   const selectZone = (id: ZoneId, ownerId?: string) => {
+    audio.play("district");
     setRevealed(undefined);
     setSelectedId(id);
     setSelectedProjectId(ownerId);
@@ -594,6 +598,7 @@ export default function WorldCanvas({ projects }: { projects: WorldProjectRef[] 
 
   const focusZone = (id: ZoneId, ownerId?: string) => {
     selectZone(id, ownerId);
+    audio.play("focus");
     setFocusRequest({
       zoneId: id,
       serial: Date.now(),
@@ -606,6 +611,7 @@ export default function WorldCanvas({ projects }: { projects: WorldProjectRef[] 
   const focusCompound = useCallback((ownerId: string) => {
     const compound = compounds.find((candidate) => candidate.entry.project.id === ownerId);
     if (!compound) return;
+    audio.play("focus");
     setFocusRequest({
       zoneId: "hub",
       serial: Date.now(),
@@ -619,9 +625,10 @@ export default function WorldCanvas({ projects }: { projects: WorldProjectRef[] 
         compound.bounds.maxZ - compound.bounds.minZ + 6,
       ],
     });
-  }, [compounds]);
+  }, [audio, compounds]);
 
   const selectCompound = useCallback((ownerId: string) => {
+    audio.play("district");
     setRevealed(undefined);
     setSelectedId(null);
     setSelectedProjectId(ownerId);
@@ -629,9 +636,10 @@ export default function WorldCanvas({ projects }: { projects: WorldProjectRef[] 
     setSelectedEntityId(undefined);
     setRelationshipFocusEntityId(undefined);
     setPanelOpen(true);
-  }, []);
+  }, [audio]);
 
   const locateEntity = (entity: WorldEntity) => {
+    audio.play("focus");
     setSelectedEntityId(entity.id);
     setRelationshipFocusEntityId(undefined);
     const zone = entity.zone ?? `${entity.type}s`;
@@ -647,19 +655,38 @@ export default function WorldCanvas({ projects }: { projects: WorldProjectRef[] 
     });
   };
 
+  /**
+   * Frame a person and the issues assigned to them.
+   *
+   * Both districts belong to that person's own compound. Reading them off the
+   * primary project's layout aimed the camera at another project's crew camp
+   * and sized the zoom from the wrong distance — which is why this zoomed out
+   * to nothing in a multi-project world.
+   */
   const locateAllPersonIssues = () => {
     if (!selectedEntity || selectedEntity.type !== "person") return;
     const relatedIssues = selectedRelationships.filter(({ entity }) => entity.type === "issue");
     if (relatedIssues.length === 0) return;
     setRelationshipFocusEntityId(selectedEntity.id);
-    const personPosition = renderPositions.people;
-    const issuePosition = renderPositions.issues;
-    const span = Math.max(Math.abs(personPosition[0] - issuePosition[0]), Math.abs(personPosition[2] - issuePosition[2])) + 8;
+
+    const owner = selectedEntity.projectId;
+    const compound = compounds.find((candidate) => candidate.entry.project.id === owner) ?? compounds[0];
+    const [personX, personZ] = zoneWorldTarget("people", owner);
+    const [issueX, issueZ] = zoneWorldTarget("issues", owner);
+    const peopleSize = compound?.zones.find((zone) => zone.id === "people")?.size ?? [6.4, 5.4];
+    const issueSize = compound?.zones.find((zone) => zone.id === "issues")?.size ?? [10.4, 7.6];
+
+    // Frame the box that holds both districts, rather than guessing a zoom from
+    // the distance between their centres.
     setFocusRequest({
       zoneId: "issues",
       serial: Date.now(),
-      target: [(personPosition[0] + issuePosition[0]) / 2, (personPosition[2] + issuePosition[2]) / 2],
-      zoom: MathUtils.clamp(390 / span, 16, 48),
+      projectId: owner,
+      target: [(personX + issueX) / 2, (personZ + issueZ) / 2],
+      fit: [
+        Math.abs(personX - issueX) + (peopleSize[0] + issueSize[0]) / 2 + 4,
+        Math.abs(personZ - issueZ) + (peopleSize[1] + issueSize[1]) / 2 + 4,
+      ],
     });
   };
 
@@ -672,6 +699,7 @@ export default function WorldCanvas({ projects }: { projects: WorldProjectRef[] 
   }, []);
 
   const reconcileCreatedIssue = async (created: WorldEntity) => {
+    audio.play("confirm");
     const owner = created.projectId || projectId;
     issueSnapshotRef.current.set(owner, [
       created,
@@ -705,6 +733,7 @@ export default function WorldCanvas({ projects }: { projects: WorldProjectRef[] 
   };
 
   const reconcileMutatedEntity = async (entity: WorldEntity) => {
+    audio.play("confirm");
     const owner = entity.projectId || projectId;
     const replace = <T extends { entities: WorldEntity[] }>(current: T | undefined): T | undefined => current
       ? { ...current, entities: current.entities.map((candidate) => candidate.id === entity.id ? entity : candidate) }
@@ -1047,6 +1076,16 @@ export default function WorldCanvas({ projects }: { projects: WorldProjectRef[] 
         <nav className="world-toolbar" aria-label="World actions">
           <button className={`sync-badge sync-${syncState}`} type="button" onClick={() => void refreshWorld("manual")} disabled={syncState === "syncing"} title="Reconcile all world data with APS now">
             <i /> {syncState === "syncing" ? "Syncing…" : lastSyncedAt ? `Synced ${new Date(lastSyncedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "Waiting for APS"}
+          </button>
+          <button
+            className={`toolbar-button sound-toggle${audio.enabled ? " on" : ""}`}
+            type="button"
+            onClick={audio.toggle}
+            aria-pressed={audio.enabled}
+            title={audio.enabled ? "Turn world sound off" : "Turn world sound on"}
+            aria-label={audio.enabled ? "Turn world sound off" : "Turn world sound on"}
+          >
+            {audio.enabled ? "🔊" : "🔇"}
           </button>
           <div className="toolbar-menu">
             <button className="toolbar-button" type="button" onClick={() => setNavMenuOpen((open) => !open)} aria-expanded={navMenuOpen} aria-label="More world actions">⋯</button>
@@ -1602,12 +1641,13 @@ function WorldScene({
     assetCategories,
     assetYard,
     issues,
+    rfis,
     people,
     documents,
     forms,
     positions,
     zones,
-  }), [assets, assetCategories, assetYard, issues, people, documents, forms, positions, zones]);
+  }), [assets, assetCategories, assetYard, issues, rfis, people, documents, forms, positions, zones]);
   // The walled compound is derived from the districts it has to contain, so a
   // moved or grown district can never end up outside the wall.
   const bounds = useMemo(() => compoundBounds(zones, positions), [zones, positions]);
@@ -1615,10 +1655,15 @@ function WorldScene({
   const paths = useMemo(() => districtPaths(zones, positions, gates, bounds), [zones, positions, gates, bounds]);
   const water = useMemo(() => waterBodies(bounds, zones, positions, paths), [bounds, zones, positions, paths]);
   const issueBays = useMemo(() => layoutIssueBays(issues), [issues]);
-  const selectedIssueId = selectedEntityId && issues.some((issue) => issue.id === selectedEntityId)
-    ? selectedEntityId
-    : undefined;
-  const wireAnchorId = relationshipFocusEntityId ?? selectedIssueId;
+  /**
+   * Wires used to be drawn only for a selected *issue*, which left an RFI, an
+   * asset or a form showing verified relationships in its panel with nothing
+   * drawn in the world to match. Any selected record anchors them now; the
+   * filter below still only draws a link whose two endpoints both have a real
+   * position in this compound, so nothing is ever guessed.
+   */
+  const wireAnchorId = relationshipFocusEntityId
+    ?? (selectedEntityId && entityPositions.has(selectedEntityId) ? selectedEntityId : undefined);
   return (
     <>
       <DirtPaths paths={paths} />
@@ -1774,6 +1819,7 @@ interface EntityPositionInput {
   assetCategories: AssetCategoryOption[];
   assetYard: AssetYardPlan<WorldEntity>;
   issues: WorldEntity[];
+  rfis: WorldEntity[];
   people: WorldEntity[];
   documents: WorldEntity[];
   forms: WorldEntity[];
@@ -1822,7 +1868,7 @@ function buildEntityPositionMap(input: EntityPositionInput): Map<string, [number
     ]);
   });
 
-  const addGrid = (entities: WorldEntity[], zoneId: "documents" | "forms", stepX: number, stepZ: number, zOffset: number) => {
+  const addGrid = (entities: WorldEntity[], zoneId: "documents" | "forms" | "rfis", stepX: number, stepZ: number, zOffset: number) => {
     const size = input.zones.find((zone) => zone.id === zoneId)?.size ?? [5.8, 4.8];
     const columns = Math.min(Math.max(1, Math.floor((size[0] - 1.2) / stepX)), Math.max(1, Math.ceil(Math.sqrt(entities.length))));
     const rows = Math.max(1, Math.ceil(entities.length / columns));
@@ -1838,6 +1884,9 @@ function buildEntityPositionMap(input: EntityPositionInput): Map<string, [number
   };
   addGrid(input.documents, "documents", .62, .58, .95);
   addGrid(input.forms, "forms", .58, .56, .9);
+  // Mirrors the layout RfiEntities draws with, so a wire lands on the board
+  // rather than near it.
+  addGrid(input.rfis, "rfis", .72, .64, 1.0);
   return result;
 }
 
