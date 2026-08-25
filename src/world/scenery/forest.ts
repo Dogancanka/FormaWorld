@@ -43,9 +43,20 @@ export interface ForestInput {
   limit?: number;
 }
 
-const STEP = 1.15;
-const DEFAULT_REACH = 40;
-const DEFAULT_LIMIT = 4200;
+/**
+ * The wood is planted in two bands.
+ *
+ * Near the compounds it is dense, because that is the ground a reader actually
+ * looks at. Past `NEAR_BAND` the step widens: that distance is where the scene's
+ * fog starts closing, so individual trees stop being legible and a tighter grid
+ * would only be paying for haze. This is the level of detail the landscape
+ * needs — not loading on approach, but spending the budget where it shows.
+ */
+const NEAR_STEP = 1.15;
+const FAR_STEP = 3.1;
+const NEAR_BAND = 42;
+const DEFAULT_REACH = 130;
+const DEFAULT_LIMIT = 5200;
 /** Nothing grows within this of a compound wall. */
 const COMPOUND_CLEARANCE = 1.6;
 const WATER_CLEARANCE = 0.5;
@@ -104,32 +115,54 @@ export function plantForest(input: ForestInput): Plant[] {
   // spends the whole limit on the first corner of a wide world and leaves the
   // rest bare — which is exactly how the first attempt looked.
   const candidates: Plant[] = [];
-  for (let gridX = area.minX - reach; gridX <= area.maxX + reach; gridX += STEP) {
-    for (let gridZ = area.minZ - reach; gridZ <= area.maxZ + reach; gridZ += STEP) {
-      const seed = hash(gridX, gridZ, 0x9e37);
-      // The density field decides how much of the grid survives here, so stands
-      // thicken and thin instead of being evenly spaced.
-      const threshold = 0.55 + density(gridX, gridZ) * 0.4;
-      if (unit(seed, 3) > threshold) continue;
+  const nearBand = {
+    minX: area.minX - NEAR_BAND,
+    maxX: area.maxX + NEAR_BAND,
+    minZ: area.minZ - NEAR_BAND,
+    maxZ: area.maxZ + NEAR_BAND,
+  };
+  const inNearBand = (x: number, z: number) =>
+    x >= nearBand.minX && x <= nearBand.maxX && z >= nearBand.minZ && z <= nearBand.maxZ;
 
-      const x = gridX + (unit(seed, 7) - 0.5) * STEP * 0.9;
-      const z = gridZ + (unit(seed, 13) - 0.5) * STEP * 0.9;
-      if (!clearOfCompounds(x, z) || !clearOfWater(x, z)) continue;
+  const sow = (step: number, bounds: ForestArea, skipNear: boolean) => {
+    for (let gridX = bounds.minX; gridX <= bounds.maxX; gridX += step) {
+      for (let gridZ = bounds.minZ; gridZ <= bounds.maxZ; gridZ += step) {
+        // The far pass covers the whole world, so it skips what the near pass
+        // has already sown rather than doubling up on it.
+        if (skipNear && inNearBand(gridX, gridZ)) continue;
+        const seed = hash(gridX, gridZ, 0x9e37);
+        // The density field decides how much of the grid survives here, so
+        // stands thicken and thin instead of being evenly spaced.
+        const threshold = 0.55 + density(gridX, gridZ) * 0.4;
+        if (unit(seed, 3) > threshold) continue;
 
-      const roll = seed % 100;
-      const kind: PlantKind = roll < 62 ? "pine" : roll < 88 ? "bush" : "rock";
-      candidates.push({
-        kind,
-        x,
-        z,
-        scale: kind === "pine"
-          ? 0.7 + unit(seed, 17) * 0.75
-          : 0.75 + unit(seed, 17) * 0.5,
-        rotation: unit(seed, 21) * Math.PI * 2,
-        tint: seed % 3,
-      });
+        const x = gridX + (unit(seed, 7) - 0.5) * step * 0.9;
+        const z = gridZ + (unit(seed, 13) - 0.5) * step * 0.9;
+        if (!clearOfCompounds(x, z) || !clearOfWater(x, z)) continue;
+
+        const roll = seed % 100;
+        const kind: PlantKind = roll < 62 ? "pine" : roll < 88 ? "bush" : "rock";
+        candidates.push({
+          kind,
+          x,
+          z,
+          scale: kind === "pine"
+            ? 0.7 + unit(seed, 17) * 0.75
+            : 0.75 + unit(seed, 17) * 0.5,
+          rotation: unit(seed, 21) * Math.PI * 2,
+          tint: seed % 3,
+        });
+      }
     }
-  }
+  };
+
+  sow(NEAR_STEP, nearBand, false);
+  sow(FAR_STEP, {
+    minX: area.minX - reach,
+    maxX: area.maxX + reach,
+    minZ: area.minZ - reach,
+    maxZ: area.maxZ + reach,
+  }, true);
 
   if (candidates.length <= limit) return candidates;
   // Thinned by a hash of the position rather than by where the scan reached, so

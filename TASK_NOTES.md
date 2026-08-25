@@ -817,3 +817,30 @@ Measured against a production build, six projects, 1600x780.
    zoomed; this commit with a few thousand plants and two rivers 35 / 46. The
    landscape is free. (Absolute numbers are lower than the 60 recorded in Phase
    32 because that machine was quiet; only the comparison means anything.)
+
+## Phase 35 — The world is as big as the projects on it
+
+1. A river stopped dead in open grass with a visible end cap. The cause was two
+   numbers that had nothing to do with each other: the terrain was a fixed
+   900-unit plane whatever the world contained, while the wood reached 40 units
+   past the compounds and the rivers 34. Everything the scenery covered ended
+   hundreds of units inside the ground it stood on.
+2. One number now, `WORLD_REACH`, used by all of them. The scene's fog closes at
+   104 units, so 130 is past anything that can be seen; the terrain is sized to
+   the compounds plus that reach, and the wood and the rivers are planted to the
+   same extent. Nothing has a visible edge because the fog closes first. A world
+   with one project is a fraction of the old plane; a world with six is larger.
+   Verified at full zoom-out: the landscape dissolves into haze on every side.
+3. Filling that reach at the near band's density would be a hundred thousand grid
+   cells for a handful of visible trees. The wood is sown in two bands instead —
+   dense out to 42 units, then a wider step to the edge. That distance is where
+   the fog starts closing, so a tighter grid past it would only be paying for
+   haze. This is the level of detail the landscape actually needed: not loading
+   on approach, but spending the budget where it shows.
+4. Lakes deliberately did *not* get the longer reach. They are large, sparse
+   features and scattering two dozen of them over the full extent would leave
+   the middle of the world — the part anyone looks at — emptier than before.
+5. Measured, five projects, production build, same machine and sitting: 33fps
+   overview and 49 zoomed, against 35 / 46 for the smaller landscape and 30 / 40
+   for the commit before any of it. A world several times the area costs nothing
+   measurable, which is what the two-band sowing and the instancing are for.

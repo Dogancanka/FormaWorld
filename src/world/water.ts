@@ -226,8 +226,14 @@ export interface RiverCourse {
 /** A river needs at least this much clear ground to run through. */
 const RIVER_MIN_LANE = 6;
 const RIVER_HALF_WIDTH = 1.15;
-/** How far past the outermost compound a river runs before it leaves frame. */
-const RIVER_OVERSHOOT = 34;
+/**
+ * How far past the outermost compound a river runs.
+ *
+ * It has to reach the edge of the terrain. At 34 the course simply stopped in
+ * open grass with a visible end cap, which is the one thing a river must never
+ * do. The caller passes the world's own reach so the two always agree.
+ */
+const RIVER_OVERSHOOT = 130;
 
 /**
  * The gaps between compounds, along one axis.
@@ -264,7 +270,7 @@ function openLanes(
  * that lane. There is no candidate-and-reject step, so a river can never end up
  * cutting through a project.
  */
-export function riverCourses(compounds: CompoundRect[]): RiverCourse[] {
+export function riverCourses(compounds: CompoundRect[], overshoot = RIVER_OVERSHOOT): RiverCourse[] {
   if (compounds.length === 0) return [];
   const area = compounds.reduce((total, rect) => ({
     minX: Math.min(total.minX, rect.minX),
@@ -279,14 +285,14 @@ export function riverCourses(compounds: CompoundRect[]): RiverCourse[] {
   // A river running along X sits in a lane of free Z, and the other way round.
   const horizontalLanes = openLanes(
     compounds.map((rect) => [rect.minZ, rect.maxZ] as [number, number]),
-    area.minZ - RIVER_OVERSHOOT,
-    area.maxZ + RIVER_OVERSHOOT,
+    area.minZ - overshoot,
+    area.maxZ + overshoot,
     margin,
   );
   const verticalLanes = openLanes(
     compounds.map((rect) => [rect.minX, rect.maxX] as [number, number]),
-    area.minX - RIVER_OVERSHOOT,
-    area.maxX + RIVER_OVERSHOOT,
+    area.minX - overshoot,
+    area.maxX + overshoot,
     margin,
   );
 
@@ -317,9 +323,9 @@ export function riverCourses(compounds: CompoundRect[]): RiverCourse[] {
     // The meander can never leave the lane, so the channel cannot reach a wall.
     const sway = Math.max(0, (lane[1] - lane[0]) / 2 - margin);
     const seed = Math.round(Math.abs(centre) * 100) % 997;
-    const start = along === "x" ? area.minX - RIVER_OVERSHOOT : area.minZ - RIVER_OVERSHOOT;
-    const end = along === "x" ? area.maxX + RIVER_OVERSHOOT : area.maxZ + RIVER_OVERSHOOT;
-    const steps = 48;
+    const start = along === "x" ? area.minX - overshoot : area.minZ - overshoot;
+    const end = along === "x" ? area.maxX + overshoot : area.maxZ + overshoot;
+    const steps = 96;
     const points: Array<[number, number]> = Array.from({ length: steps + 1 }, (_, index) => {
       const t = index / steps;
       const distance = start + (end - start) * t;

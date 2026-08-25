@@ -75,6 +75,15 @@ type FocusRequest = {
 };
 type SyncState = "idle" | "syncing" | "current" | "partial_error";
 
+/**
+ * How far the landscape reaches past the outermost compound.
+ *
+ * The scene's fog closes at 104 units, so anything past this is solid haze. The
+ * terrain, the wood and the rivers all use it, which is what stops a river
+ * ending in open grass and the wood running out against a bare plane.
+ */
+const WORLD_REACH = 130;
+
 // Shapes the merge falls back to. A merged feed only ever borrows the fields a
 // domain does not aggregate, so these are never shown as data.
 const EMPTY_ASSET_FEED: AssetFeed = { state: "empty", entities: [], total: 0, limit: 25, statuses: [], categories: [] };
@@ -458,8 +467,19 @@ export default function WorldCanvas({ projects }: { projects: WorldProjectRef[] 
     minZ: compound.bounds.minZ + compound.offset[1],
     maxZ: compound.bounds.maxZ + compound.offset[1],
   })), [compounds]);
+  /**
+   * How far the landscape reaches past the outermost compound.
+   *
+   * The scene's fog closes at 104 units, so anything beyond this is solid haze;
+   * the terrain, the wood and the rivers all use it, which is what keeps a river
+   * from stopping in open grass and the wood from ending against a bare plane.
+   */
+  const groundSize = useMemo(() => Math.max(
+    Math.abs(worldBounds.maxX - worldBounds.minX),
+    Math.abs(worldBounds.maxZ - worldBounds.minZ),
+  ) + WORLD_REACH * 2, [worldBounds]);
   const meadowWater = useMemo(() => openWater(compoundRects), [compoundRects]);
-  const rivers = useMemo(() => riverCourses(compoundRects), [compoundRects]);
+  const rivers = useMemo(() => riverCourses(compoundRects, WORLD_REACH), [compoundRects]);
   /**
    * The wood. Every plant avoids the compounds, the lakes and the river
    * channels, and the whole thing is drawn as a handful of instanced meshes —
@@ -468,6 +488,7 @@ export default function WorldCanvas({ projects }: { projects: WorldProjectRef[] 
    */
   const forest = useMemo(() => plantForest({
     compounds: compoundRects,
+    reach: WORLD_REACH,
     water: [
       ...meadowWater.map((body) => ({ center: body.center, radius: body.radius })),
       // A river is sampled as a chain of circles, which is close enough to keep
@@ -935,7 +956,7 @@ export default function WorldCanvas({ projects }: { projects: WorldProjectRef[] 
         />
         {/* The ground is one plane under every compound, so it is drawn here
             rather than once per project. */}
-        <GroundPlane />
+        <GroundPlane size={groundSize} />
         <WaterBodies bodies={meadowWater} />
         <Rivers courses={rivers} />
         <Forest plants={forest} />

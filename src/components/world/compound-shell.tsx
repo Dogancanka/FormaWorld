@@ -52,11 +52,20 @@ function tiles(length: number, per: number): number {
   return Math.max(1, Math.round(length / per));
 }
 
-export function GroundPlane() {
-  const grass = useMemo(() => grassTexture(GRASS, [GROUND_SIZE / 3.2, GROUND_SIZE / 3.2]), []);
+/**
+ * The terrain, sized to the world standing on it.
+ *
+ * It used to be a fixed 900-unit tile whatever the world contained, which put
+ * its edge hundreds of units past anything the scenery covered — so a river ran
+ * out mid-field and the wood stopped against bare grass. The plane now follows
+ * the compounds, and the scenery is planted to the same extent, so the ground
+ * ends only where the fog has already closed it.
+ */
+export function GroundPlane({ size = GROUND_SIZE }: { size?: number }) {
+  const grass = useMemo(() => grassTexture(GRASS, [size / 3.2, size / 3.2]), [size]);
   return (
     <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
-      <planeGeometry args={[GROUND_SIZE, GROUND_SIZE]} />
+      <planeGeometry args={[size, size]} />
       <meshStandardMaterial map={grass} roughness={1} />
     </mesh>
   );
