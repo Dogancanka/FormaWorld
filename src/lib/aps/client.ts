@@ -1,7 +1,7 @@
 import "server-only";
 
-import { APS_API_BASE_URL, getApsConfig } from "./config";
-import { refreshAccessToken } from "./oauth";
+import { APS_API_BASE_URL, getApsConfig, getApsScopes } from "./config";
+import { ApsAuthError, refreshAccessToken } from "./oauth";
 import type {
   ApsCollection,
   ApsHub,
@@ -21,6 +21,56 @@ export class ApsApiError extends Error {
   }
 }
 
+interface RefreshedTokens {
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: number;
+  scopes: string[];
+}
+
+/**
+ * One refresh per refresh token, however many requests want it at once.
+ *
+ * The world reconciles seven feeds in parallel every thirty seconds. When the
+ * access token was near expiry all seven used to call the token endpoint with
+ * the same refresh token; Autodesk rotates refresh tokens, so the first call
+ * won and invalidated the token the other six were still holding. Those six
+ * came back `invalid_grant` and the old code destroyed the session on any
+ * error — which is exactly the "refresh token expires sometimes" that logged
+ * people out mid-session.
+ *
+ * The entry outlives the request that created it by half a minute so a handler
+ * that read the cookie a moment before the rotation joins this refresh instead
+ * of replaying a token that is already spent.
+ */
+const refreshesInFlight = new Map<string, Promise<RefreshedTokens>>();
+
+function refreshOnce(refreshToken: string): Promise<RefreshedTokens> {
+  const existing = refreshesInFlight.get(refreshToken);
+  if (existing) return existing;
+
+  const pending = refreshAccessToken(getApsConfig(), refreshToken).then((tokens) => ({
+    accessToken: tokens.access_token,
+    refreshToken: tokens.refresh_token ?? refreshToken,
+    expiresAt: Date.now() + tokens.expires_in * 1000,
+    // APS does not always echo `scope` back. Falling back to what was asked
+    // for is correct: the authorize step grants the requested scopes or fails
+    // outright, so an empty echo never means a scope was refused. Treating it
+    // as "no scopes" is what left write actions permanently unavailable with a
+    // "sign in again" that could not fix anything.
+    scopes: tokens.scope?.split(/\s+/).filter(Boolean) ?? getApsScopes(),
+  }));
+
+  refreshesInFlight.set(refreshToken, pending);
+  pending
+    .then(() => {
+      const timer = setTimeout(() => refreshesInFlight.delete(refreshToken), 30_000);
+      timer.unref?.();
+    })
+    .catch(() => refreshesInFlight.delete(refreshToken));
+  return pending;
+}
+
 export async function getValidAccessToken(): Promise<string> {
   const session = await getSession();
   if (!session.accessToken || !session.expiresAt) {
@@ -33,14 +83,20 @@ export async function getValidAccessToken(): Promise<string> {
   }
 
   try {
-    const tokens = await refreshAccessToken(getApsConfig(), session.refreshToken);
-    session.accessToken = tokens.access_token;
-    session.refreshToken = tokens.refresh_token ?? session.refreshToken;
-    session.expiresAt = Date.now() + tokens.expires_in * 1000;
-    if (tokens.scope) session.grantedScopes = tokens.scope.split(/\s+/).filter(Boolean);
+    const tokens = await refreshOnce(session.refreshToken);
+    session.accessToken = tokens.accessToken;
+    session.refreshToken = tokens.refreshToken;
+    session.expiresAt = tokens.expiresAt;
+    session.grantedScopes = tokens.scopes;
     await session.save();
-    return tokens.access_token;
+    return tokens.accessToken;
   } catch (error) {
+    // Only a grant Autodesk has rejected outright is worth the session. A
+    // gateway error or a dropped connection is a reason to try again in thirty
+    // seconds, not to throw the reader back to the landing page.
+    if (error instanceof ApsAuthError && !error.isDeadGrant) {
+      throw new ApsApiError(`Autodesk token refresh is failing: ${error.message}`, 503);
+    }
     session.destroy();
     throw error;
   }

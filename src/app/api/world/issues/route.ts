@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { ApsApiError } from "@/lib/aps/client";
 import { createWorldIssue, listIssueSubtypeOptions, listWorldIssues } from "@/lib/aps/issues";
-import { getSession } from "@/lib/session";
+import { getSession, sessionMayWrite } from "@/lib/session";
 import type { IssueFeed, IssueFeedState } from "@/world/issues/types";
 import type { CreateIssueInput, CreateIssueResult } from "@/world/issues/write-types";
 import { requestHasSameOrigin, validateCreateIssueInput } from "@/world/issues/write-validation";
@@ -49,7 +49,7 @@ export async function POST(request: Request) {
   }
   const session = await getSession();
   if (!session.selectedProject) return NextResponse.json({ error: "Select a project first." }, { status: 409 });
-  if (!session.grantedScopes?.includes("data:write")) {
+  if (!sessionMayWrite(session)) {
     return NextResponse.json({
       error: "This session does not include the APS data:write scope. Sign in again before creating an issue.",
       requiresReauthentication: true,

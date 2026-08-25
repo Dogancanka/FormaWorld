@@ -3,7 +3,7 @@ import { ApsApiError } from "@/lib/aps/client";
 import { getAssetStatusCapability, updateWorldAssetStatus } from "@/lib/aps/assets";
 import { getFormSubmitCapability, submitWorldForm } from "@/lib/aps/forms";
 import { getIssueStatusCapability, updateWorldIssueStatus } from "@/lib/aps/issues";
-import { getSession } from "@/lib/session";
+import { getSession, sessionMayWrite } from "@/lib/session";
 import type { WorldEntityType } from "@/world/entities";
 import type { ExecuteWorldActionResult, WorldActionOptions } from "@/world/actions/types";
 import { validateWorldActionInput } from "@/world/actions/validation";
@@ -24,7 +24,7 @@ export async function GET(request: Request) {
   if (!entityType || !mutableTypes.has(entityType) || !entityId) {
     return NextResponse.json({ error: "Provide a supported entity type and APS entity ID." }, { status: 400 });
   }
-  const writeScopeGranted = Boolean(session.grantedScopes?.includes("data:write"));
+  const writeScopeGranted = sessionMayWrite(session);
   if (!writeScopeGranted) {
     const result: WorldActionOptions = { state: "read_only", entityType, entityId, writeScopeGranted, capabilities: [], error: "Sign in again to grant APS data:write access." };
     return NextResponse.json(result);
@@ -63,7 +63,7 @@ export async function POST(request: Request) {
   if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) return NextResponse.json({ error: "Content-Type must be application/json." }, { status: 415 });
   const session = await getSession();
   if (!session.selectedProject) return NextResponse.json({ error: "Select a project first." }, { status: 409 });
-  if (!session.grantedScopes?.includes("data:write")) return NextResponse.json({ error: "Sign in again to grant APS data:write access.", requiresReauthentication: true }, { status: 403 });
+  if (!sessionMayWrite(session)) return NextResponse.json({ error: "This session was granted read-only APS access. Sign in again to grant data:write.", requiresReauthentication: true }, { status: 403 });
   const input = validateWorldActionInput(await request.json().catch(() => undefined));
   if (!input) return NextResponse.json({ error: "Provide a supported action, APS entity ID, and value." }, { status: 400 });
   try {

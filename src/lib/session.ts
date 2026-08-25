@@ -47,3 +47,20 @@ export async function getSession(): Promise<IronSession<SessionData>> {
     },
   });
 }
+
+/**
+ * Whether this session may attempt an APS write.
+ *
+ * An *empty* scope list means "APS did not tell us", not "APS refused". Older
+ * sessions recorded an empty list whenever the token response omitted `scope`,
+ * and the strict check turned that silence into a permanent block with a "sign
+ * in again" that produced the same silence. Autodesk is the authority on what a
+ * token may do, so an unknown scope set is allowed through to APS, which
+ * answers with a real 403 if the grant truly lacks it. A list that is present
+ * and lacks `data:write` is still refused here — that one is a real answer.
+ */
+export function sessionMayWrite(session: Pick<SessionData, "grantedScopes">): boolean {
+  const scopes = session.grantedScopes;
+  if (!scopes || scopes.length === 0) return true;
+  return scopes.includes("data:write");
+}

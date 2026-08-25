@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { ApsApiError } from "@/lib/aps/client";
 import { listIssueSubtypeOptions } from "@/lib/aps/issues";
-import { getSession } from "@/lib/session";
+import { getSession, sessionMayWrite } from "@/lib/session";
 import type { IssueCreateOptions } from "@/world/issues/write-types";
 
 export async function GET() {
@@ -12,7 +12,7 @@ export async function GET() {
     const result: IssueCreateOptions = {
       state: subtypes.length ? "available" : "empty",
       subtypes,
-      writeScopeGranted: session.grantedScopes?.includes("data:write") ?? false,
+      writeScopeGranted: sessionMayWrite(session),
     };
     return NextResponse.json(result);
   } catch (cause) {
@@ -20,7 +20,7 @@ export async function GET() {
     const result: IssueCreateOptions = {
       state: status === 403 ? "permission_denied" : "error",
       subtypes: [],
-      writeScopeGranted: session.grantedScopes?.includes("data:write") ?? false,
+      writeScopeGranted: sessionMayWrite(session),
       httpStatus: status,
       error: cause instanceof Error ? cause.message : "Issue types could not be loaded.",
     };

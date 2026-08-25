@@ -20,6 +20,28 @@ interface TokenErrorPayload {
   error_description?: string;
 }
 
+/**
+ * A token endpoint failure, carrying enough to tell a dead grant from a bad
+ * afternoon. `invalid_grant` means the refresh token is spent or revoked and
+ * the reader genuinely has to sign in again; a 500 or a dropped connection
+ * means try later, and must not cost them their session.
+ */
+export class ApsAuthError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+    public readonly code?: string,
+  ) {
+    super(message);
+    this.name = "ApsAuthError";
+  }
+
+  /** True when Autodesk has said this grant will never work again. */
+  get isDeadGrant(): boolean {
+    return this.code === "invalid_grant" || this.status === 400 || this.status === 401;
+  }
+}
+
 export function buildAuthorizationUrl(config: ApsConfig, state: string): string {
   const url = new URL(APS_AUTHORIZE_URL);
   url.search = new URLSearchParams({
@@ -52,8 +74,10 @@ async function requestToken(
 
   if (!response.ok) {
     const payload = (await response.json().catch(() => ({}))) as TokenErrorPayload;
-    throw new Error(
+    throw new ApsAuthError(
       `APS authentication failed (${response.status}): ${payload.error_description ?? payload.error ?? response.statusText}`,
+      response.status,
+      payload.error,
     );
   }
 
