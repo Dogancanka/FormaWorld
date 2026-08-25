@@ -51,6 +51,7 @@ import { buildSnapshot } from "@/world/progression/snapshot";
 import { saveVisitSnapshot, useProgression } from "@/world/progression/store";
 import { groupDistrictEntities, isUngrouped } from "@/world/entities/grouping";
 import { openWater, pointClearOfWater, waterBodies, type CompoundRect, type WaterBody } from "@/world/water";
+import type { WorldSnapshotResponse as WorldSnapshot } from "@/app/api/world/snapshot/route";
 import { brickTexture, dirtTexture, grassTexture, shingleTexture } from "@/world/visual/textures";
 import { MathUtils, MeshBasicMaterial, Vector3, type Group, type Mesh } from "three";
 import type { MapControls as MapControlsImpl } from "three-stdlib";
@@ -101,35 +102,30 @@ async function fetchIssueFeed(projectId?: string): Promise<IssueFeed> {
   return response.json() as Promise<IssueFeed>;
 }
 
-async function fetchPeopleFeed(projectId?: string): Promise<PeopleFeed> {
-  const response = await fetch(feedUrl("/api/world/people", projectId), { cache: "no-store", headers: { Accept: "application/json" } });
-  if (!response.ok) throw new Error(`People request failed with HTTP ${response.status}.`);
-  return response.json() as Promise<PeopleFeed>;
-}
-
-async function fetchDocumentFeed(projectId?: string): Promise<DocumentFeed> {
-  const response = await fetch(feedUrl("/api/world/documents", projectId), { cache: "no-store", headers: { Accept: "application/json" } });
-  if (!response.ok) throw new Error(`Document request failed with HTTP ${response.status}.`);
-  return response.json() as Promise<DocumentFeed>;
-}
-
-async function fetchRfiFeed(projectId?: string): Promise<RfiFeed> {
-  const response = await fetch(feedUrl("/api/world/rfis", projectId), { cache: "no-store" });
-  const payload = await response.json();
-  if (!response.ok) throw new Error(payload?.error ?? `RFIs failed with HTTP ${response.status}.`);
-  return payload as RfiFeed;
-}
-
 async function fetchFormFeed(projectId?: string): Promise<FormFeed> {
   const response = await fetch(feedUrl("/api/world/forms", projectId), { cache: "no-store", headers: { Accept: "application/json" } });
   if (!response.ok) throw new Error(`Forms request failed with HTTP ${response.status}.`);
   return response.json() as Promise<FormFeed>;
 }
 
-async function fetchRelationshipFeed(projectId?: string): Promise<RelationshipFeed> {
-  const response = await fetch(feedUrl("/api/world/relationships", projectId), { cache: "no-store", headers: { Accept: "application/json" } });
-  if (!response.ok) throw new Error(`Relationship request failed with HTTP ${response.status}.`);
-  return response.json() as Promise<RelationshipFeed>;
+/**
+ * One compound, one request.
+ *
+ * Seven separate reads per project meant 42 requests for a six-project world
+ * against a browser that opens roughly six connections per origin, so the
+ * compounds arrived in waves. The server reads the seven domains in parallel
+ * either way.
+ */
+async function fetchProjectSnapshot(projectId?: string): Promise<WorldSnapshot> {
+  const response = await fetch(feedUrl("/api/world/snapshot", projectId), {
+    cache: "no-store",
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({})) as { error?: string };
+    throw new Error(payload.error ?? `World snapshot failed with HTTP ${response.status}.`);
+  }
+  return response.json() as Promise<WorldSnapshot>;
 }
 
 async function fetchIssueCreateOptions(projectId?: string): Promise<IssueCreateOptions> {
@@ -460,6 +456,19 @@ export default function WorldCanvas({ projects }: { projects: WorldProjectRef[] 
   })), [compounds]);
   const meadowWater = useMemo(() => openWater(compoundRects), [compoundRects]);
 
+  /**
+   * The shadow frustum has to reach every compound. It was fixed at 34, which
+   * covers one compound; the rest of a multi-project world fell outside it and
+   * cast no shadow at all.
+   */
+  const shadowExtent = useMemo(() => Math.min(120, Math.max(
+    34,
+    Math.max(
+      Math.abs(worldBounds.minX), Math.abs(worldBounds.maxX),
+      Math.abs(worldBounds.minZ), Math.abs(worldBounds.maxZ),
+    ) + 8,
+  )), [worldBounds]);
+
   const minZoom = useMemo(
     () => Math.max(4, 12 / Math.sqrt(Math.max(1, compounds.length))),
     [compounds.length],
@@ -739,70 +748,57 @@ export default function WorldCanvas({ projects }: { projects: WorldProjectRef[] 
    */
   const refreshProject = useCallback(async (project: WorldProjectRef): Promise<boolean> => {
     const id = project.id;
-    const [assets, issues, people, documents, forms, rfis, relationships] = await Promise.allSettled([
-      fetchAssetFeed(id),
-      fetchIssueFeed(id),
-      fetchPeopleFeed(id),
-      fetchDocumentFeed(id),
-      fetchFormFeed(id),
-      fetchRfiFeed(id),
-      fetchRelationshipFeed(id),
-    ]);
+    let snapshot: WorldSnapshot;
+    try {
+      snapshot = await fetchProjectSnapshot(id);
+    } catch (cause) {
+      // The whole compound could not be read. Its last known records stay on
+      // screen rather than the districts emptying on one bad request.
+      const message = errorMessage(cause, "This project could not be read.");
+      updateProject(id, (entry) => ({
+        ...entry,
+        assets: keepLastKnown(entry.assets, { state: "error", entities: [], total: 0, limit: 25, statuses: [], categories: [], error: message }),
+        issues: keepLastKnown(entry.issues, { state: "error", entities: [], total: 0, limit: 50, error: message }),
+        people: keepLastKnown(entry.people, { state: "error", entities: [], total: 0, limit: 100, error: message }),
+        documents: keepLastKnown(entry.documents, { state: "error", entities: [], total: 0, limit: 25, scope: "Top-level folders and the first accessible folder", error: message }),
+        forms: keepLastKnown(entry.forms, { state: "error", entities: [], total: 0, limit: 25, error: message }),
+        rfis: keepLastKnown(entry.rfis, { state: "error", entities: [], total: 0, limit: 50, error: message }),
+        relationships: { state: "error", relationships: [], total: 0, error: message },
+      }));
+      return true;
+    }
     if (!mountedRef.current) return false;
 
-    const failed = [assets, issues, people, documents, forms, rfis, relationships]
-      .some((result) => result.status === "rejected" || !isSuccessfulFeed(result.value));
-
-    if (issues.status === "fulfilled") {
-      // Activity is diffed within a project. Comparing one project's issues to
-      // another's would report every record as new the moment a compound loaded.
-      const previous = issueSnapshotRef.current.get(id);
-      if (previous) {
-        const detected = detectIssueActivity(previous, issues.value.entities);
-        if (detected.length) {
-          setActivityEvents((current) => {
-            const known = new Set(current.map((event) => event.id));
-            return [...detected.filter((event) => !known.has(event.id)), ...current].slice(0, 12);
-          });
-          peekActivity();
-        }
+    // Activity is diffed within a project. Comparing one project's issues to
+    // another's would report every record as new the moment a compound loaded.
+    const previous = issueSnapshotRef.current.get(id);
+    if (previous) {
+      const detected = detectIssueActivity(previous, snapshot.issues.entities);
+      if (detected.length) {
+        setActivityEvents((current) => {
+          const known = new Set(current.map((event) => event.id));
+          return [...detected.filter((event) => !known.has(event.id)), ...current].slice(0, 12);
+        });
+        peekActivity();
       }
-      issueSnapshotRef.current.set(id, issues.value.entities);
     }
+    issueSnapshotRef.current.set(id, snapshot.issues.entities);
 
     updateProject(id, (entry) => ({
       ...entry,
-      assets: assets.status === "fulfilled" ? assets.value : keepLastKnown(entry.assets, {
-        state: "error", entities: [], total: 0, limit: 25, statuses: [], categories: [],
-        error: errorMessage(assets.reason, "Assets could not be loaded."),
-      }),
-      issues: issues.status === "fulfilled" ? issues.value : keepLastKnown(entry.issues, {
-        state: "error", entities: [], total: 0, limit: 50,
-        error: errorMessage(issues.reason, "Issues could not be loaded."),
-      }),
-      people: people.status === "fulfilled" ? people.value : keepLastKnown(entry.people, {
-        state: "error", entities: [], total: 0, limit: 100,
-        error: errorMessage(people.reason, "Project users could not be loaded."),
-      }),
-      documents: documents.status === "fulfilled" ? documents.value : keepLastKnown(entry.documents, {
-        state: "error", entities: [], total: 0, limit: 25,
-        scope: "Top-level folders and the first accessible folder",
-        error: errorMessage(documents.reason, "Documents could not be loaded."),
-      }),
-      forms: forms.status === "fulfilled" ? forms.value : keepLastKnown(entry.forms, {
-        state: "error", entities: [], total: 0, limit: 25,
-        error: errorMessage(forms.reason, "Forms could not be loaded."),
-      }),
-      rfis: rfis.status === "fulfilled" ? rfis.value : keepLastKnown(entry.rfis, {
-        state: "error", entities: [], total: 0, limit: 50,
-        error: errorMessage(rfis.reason, "RFIs could not be loaded."),
-      }),
-      relationships: relationships.status === "fulfilled" ? relationships.value : {
-        state: "error", relationships: [], total: 0,
-        error: errorMessage(relationships.reason, "Relationships could not be loaded."),
-      },
+      assets: snapshot.assets,
+      issues: snapshot.issues,
+      people: snapshot.people,
+      documents: snapshot.documents,
+      forms: snapshot.forms,
+      rfis: snapshot.rfis,
+      relationships: snapshot.relationships,
     }));
-    return failed;
+
+    // A domain that APS refused is still a successful read of the compound; the
+    // sync badge only turns amber when something actually failed.
+    return [snapshot.assets, snapshot.issues, snapshot.people, snapshot.documents, snapshot.forms, snapshot.rfis, snapshot.relationships]
+      .some((feed) => !isSuccessfulFeed(feed));
   }, [updateProject]);
 
   const refreshWorld = useCallback((trigger: WorldSyncTrigger): Promise<void> => {
@@ -881,10 +877,10 @@ export default function WorldCanvas({ projects }: { projects: WorldProjectRef[] 
           color="#fff2d6"
           position={[14, 20, 10]}
           shadow-mapSize={[2048, 2048]}
-          shadow-camera-left={-34}
-          shadow-camera-right={34}
-          shadow-camera-top={34}
-          shadow-camera-bottom={-34}
+          shadow-camera-left={-shadowExtent}
+          shadow-camera-right={shadowExtent}
+          shadow-camera-top={shadowExtent}
+          shadow-camera-bottom={-shadowExtent}
           shadow-bias={-0.0004}
         />
         {/* The ground is one plane under every compound, so it is drawn here
@@ -4003,15 +3999,18 @@ function RockCluster({ position, seed }: { position: [number, number, number]; s
   );
 }
 
+/**
+ * A scattered pine. Deliberately not animated.
+ *
+ * Each tree used to sway from its own `useFrame`. One compound could afford a
+ * few dozen such callbacks; six compounds is several hundred every frame, and
+ * that showed up as a 33ms worst frame at overview zoom — for a 1.3-degree lean
+ * that is invisible at any zoom where more than one compound is on screen.
+ */
 function PineTree({ position, seed }: { position: [number, number, number]; seed: number }) {
   const crown = useRef<Group>(null);
   const scale = .82 + ((seed >>> 3) % 40) / 100;
   const tint = ["#3f6b3c", "#4a7a44", "#37623a"][seed % 3];
-  const phase = position[0] * .7 + position[2] * .4;
-  useFrame(({ clock }) => {
-    if (!crown.current) return;
-    crown.current.rotation.z = Math.sin(clock.getElapsedTime() * .6 + phase) * .022;
-  });
   return (
     <group position={position} scale={scale} rotation={[0, ((seed >>> 5) % 360) * (Math.PI / 180), 0]}>
       <mesh castShadow position={[0, .22, 0]}>

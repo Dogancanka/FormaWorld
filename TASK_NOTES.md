@@ -713,3 +713,35 @@ still opts out of raycasting through `ignoreRaycast`.
    which at overview zoom puts it over the compound *behind*, so clicking one
    project's label selected another's. Found by clicking it in the browser. It
    is inert again, like every other overlay in the scene.
+
+## Phase 32 — Measuring the world instead of guessing at it
+
+Measured against a production build, six projects, 1600x780.
+
+1. The first measurement was wrong and worth recording: on the dev server a
+   six-project world appeared to take 40s to mount. That was Turbopack compiling
+   a 4600-line component on first request plus a `waitForSelector` timeout being
+   swallowed. On `next start` the same world is up in **2.0s**. Load was never
+   the problem; measuring the dev server was.
+2. The real cost was the overview: **40fps with six compounds in frame**, worst
+   frame 33ms, against a steady 60 when zoomed into one. So the ceiling is
+   how much is on screen, not how much is loaded.
+3. The cause was one `useFrame` per scattered pine. Each tree subscribed its own
+   per-frame callback to lean 1.3 degrees. One compound could afford a few dozen;
+   six is several hundred callbacks and matrix writes every frame, for motion
+   invisible at any zoom where more than one compound fits on screen. Removing it
+   took the overview to **60fps and a 20ms worst frame**.
+4. The shadow frustum was fixed at 34 units, which covers one compound. A world
+   of six spans roughly 100, so every compound but the first was rendering with
+   no shadow at all — a correctness bug found while looking for a performance
+   one. It now follows the world bounds, capped at 120.
+5. `/api/world/snapshot` returns all seven domains of one compound in one
+   response. Seven separate reads per project meant 42 requests for a
+   six-project world against a browser that opens about six connections per
+   origin. It did not move the production number, because load was not the
+   bottleneck, but it is the right shape and it is what keeps that true as
+   projects grow. The per-domain routes stay: a write reconciles exactly one
+   feed, which is what they are for.
+6. Not done, and the next thing to reach for if the world grows past six
+   compounds: instancing the scattered props. They are the bulk of the draw
+   calls, and they are identical apart from transform and tint.
