@@ -57,7 +57,7 @@ import { plantForest } from "@/world/scenery/forest";
 import { Forest, Rivers } from "./scenery";
 import type { WorldSnapshotResponse as WorldSnapshot } from "@/app/api/world/snapshot/route";
 import { brickTexture, dirtTexture, grassTexture, shingleTexture } from "@/world/visual/textures";
-import { MathUtils, MeshBasicMaterial, Vector3, type Group, type Mesh } from "three";
+import { MathUtils, MOUSE, MeshBasicMaterial, Vector3, type Group, type Mesh } from "three";
 import type { MapControls as MapControlsImpl } from "three-stdlib";
 
 /**
@@ -534,6 +534,33 @@ export default function WorldCanvas({ projects }: { projects: WorldProjectRef[] 
     maxZ: worldBounds.maxZ + 5,
   }), [worldBounds]);
 
+  /**
+   * Escape backs out one layer at a time: the composer if it is open, then the
+   * digest's highlight, then the selection itself. Without it the only way to
+   * put the world back was to find a patch of empty ground to click.
+   */
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      if (issueComposer) {
+        setIssueComposer(undefined);
+        return;
+      }
+      if (revealed) {
+        setRevealed(undefined);
+        return;
+      }
+      setSelectedEntityId(undefined);
+      setSelectedCompoundId(undefined);
+      setSelectedProjectId(undefined);
+      setRelationshipFocusEntityId(undefined);
+      setSelectedId(null);
+      setPanelOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [issueComposer, revealed]);
+
   const resetView = useCallback(() => {
     setFocusRequest({
       zoneId: "hub",
@@ -938,7 +965,16 @@ export default function WorldCanvas({ projects }: { projects: WorldProjectRef[] 
         shadows
         dpr={[1, 1.75]}
         camera={{ position: [22, 26, 22], zoom: 19, near: -1200, far: 1200 }}
-        onPointerMissed={() => { setSelectedId(null); setSelectedCompoundId(undefined); setSelectedProjectId(undefined); setRevealed(undefined); }}
+        onPointerMissed={(event) => {
+          // Only the left button clears a selection. Panning is a right-drag,
+          // and one that ends on open ground would otherwise be read as the
+          // reader deliberately clicking nothing.
+          if (event.button !== 0) return;
+          setSelectedId(null);
+          setSelectedCompoundId(undefined);
+          setSelectedProjectId(undefined);
+          setRevealed(undefined);
+        }}
         gl={{ antialias: true, alpha: false }}
       >
         {/* The clip range is symmetric and negative on the near side. An
@@ -1059,6 +1095,12 @@ export default function WorldCanvas({ projects }: { projects: WorldProjectRef[] 
           maxZoom={120}
           zoomSpeed={1}
           target={[0, 0, 2]}
+          // The left button used to both pan and select, so crossing the world
+          // meant landing on whatever was under the pointer at the end of the
+          // drag. It selects only now; panning moved to the right button, which
+          // cannot be confused with picking a record. An undefined action is
+          // how the controls are told to ignore a button entirely.
+          mouseButtons={{ LEFT: undefined, MIDDLE: MOUSE.DOLLY, RIGHT: MOUSE.PAN }}
         />
       </Canvas>
 
@@ -1256,10 +1298,11 @@ export default function WorldCanvas({ projects }: { projects: WorldProjectRef[] 
       <WorldActionBar onResetView={resetView} onCreateIssue={() => setIssueComposer({})} />
 
       <div className={`world-controls ${hasInteracted ? "faded" : ""}`}>
-        <span><b>Drag</b> pan</span>
+        <span><b>Right-drag</b> pan</span>
         <span><b>Scroll</b> zoom</span>
         <span><b>Click</b> inspect</span>
         <span><b>Double-click</b> focus</span>
+        <span><b>Esc</b> deselect</span>
       </div>
     </div>
   );

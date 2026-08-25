@@ -906,3 +906,25 @@ scroll at the ends.
    a host that merely ends in something similar.
 4. Still open: exact per-record deep links. They need one real URL per record
    type from a live ACC account to confirm the pattern and the regional host.
+
+## Phase 39 — The left button stops doing two jobs
+
+1. Left-drag both panned the world and selected whatever was under the pointer
+   when the drag ended, so crossing the world kept opening records nobody asked
+   for. Panning is a right-drag now and the left button only selects. The
+   controls are told to ignore the left button by giving it an undefined action,
+   which is the shape `OrbitControls` already handles.
+2. `onPointerMissed` had to learn about it too. A right-drag that ends on open
+   ground would otherwise read as the reader deliberately clicking nothing, and
+   clear their selection every time they panned. Only button 0 clears now.
+3. Escape backs out one layer at a time — the issue composer, then the digest's
+   highlight, then the selection itself. Before this the only way to put the
+   world back was to find a patch of empty ground and click it. The handler is a
+   plain effect over the two pieces of state it reads; a first version drove it
+   from inside `setIssueComposer`'s updater, which is a side effect in a place
+   React is free to run twice.
+4. The hint bar says `Right-drag pan` and `Esc deselect`, because a control
+   scheme nobody can discover is not an improvement.
+5. Verified in the browser: a left-drag across the world moves it 0px, the same
+   drag on the right button moves it 421px, and Escape closes an open panel and
+   leaves it closed when pressed again.
