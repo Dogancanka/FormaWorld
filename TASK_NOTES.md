@@ -884,3 +884,25 @@ ends 24 units above the bottom edge (8 on a short window, where the page's own
 `min-height` takes over) and scrolls internally once its content is longer than
 that. `overscroll-behavior: contain` keeps that scroll from turning into a page
 scroll at the ends.
+
+## Phase 38 — A way out to Autodesk
+
+1. Every record panel can now offer "Open in Autodesk". The URL is **read** off
+   the record, never constructed. Deep-link patterns for Issues, Forms, RFIs and
+   Assets are not publicly documented and the host differs by region, so
+   assembling one would produce a link that quietly 404s for some accounts —
+   worse than showing none, because a dead link in a panel that otherwise shows
+   only verified data undoes the point of the panel.
+2. `metadata.raw` already keeps the untouched APS record, so nothing new is
+   fetched. Data Management answers with a JSON:API `links.webView`, which is
+   what makes Documents work today; any module that answers the same way is
+   picked up for free, and one that does not simply shows no link.
+3. Three rules before a URL is offered, and the third is not cosmetic: it must
+   parse, it must be `https`, and its host must be Autodesk's. These values come
+   out of project data — a record whose title or custom field holds a URL must
+   never become a link this application invites somebody to click. The API's own
+   `links.self` is excluded too: it is a REST endpoint, and a reader sent there
+   gets JSON or an auth error rather than their record. Nine tests, including
+   a host that merely ends in something similar.
+4. Still open: exact per-record deep links. They need one real URL per record
+   type from a live ACC account to confirm the pattern and the regional host.

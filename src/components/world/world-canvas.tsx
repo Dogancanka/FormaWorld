@@ -51,6 +51,7 @@ import { buildSnapshot } from "@/world/progression/snapshot";
 import { saveVisitSnapshot, useProgression } from "@/world/progression/store";
 import { useWorldAudio } from "@/world/audio/use-world-audio";
 import { groupDistrictEntities, isUngrouped } from "@/world/entities/grouping";
+import { recordWebLink } from "@/world/entities/web-link";
 import { openWater, pointClearOfWater, riverCourses, waterBodies, type CompoundRect, type WaterBody } from "@/world/water";
 import { plantForest } from "@/world/scenery/forest";
 import { Forest, Rivers } from "./scenery";
@@ -3376,6 +3377,24 @@ function RelationshipSection({
   );
 }
 
+/**
+ * The record's own page in Autodesk, when APS said where it is.
+ *
+ * Nothing is rendered when it did not. The URL is read off the record rather
+ * than assembled from a pattern — deep links are undocumented and regional, so
+ * a constructed one would quietly 404 for some accounts, and a dead link in a
+ * panel that otherwise only shows verified data undoes the point of the panel.
+ */
+function AutodeskLink({ entity }: { entity: WorldEntity }) {
+  const href = recordWebLink(entity);
+  if (!href) return null;
+  return (
+    <a className="detail-external" href={href} target="_blank" rel="noopener noreferrer">
+      Open in Autodesk <span aria-hidden="true">↗</span>
+    </a>
+  );
+}
+
 function AssetDetail({ entity, projectName, actionSection, relationshipSection, onClose }: EntityDetailProps) {
   const raw = entity.metadata.raw && typeof entity.metadata.raw === "object"
     ? entity.metadata.raw as Record<string, unknown>
@@ -3403,6 +3422,7 @@ function AssetDetail({ entity, projectName, actionSection, relationshipSection, 
         <div><dt>Project</dt><dd>{projectName}</dd></div>
         <div><dt>Zone</dt><dd>{entity.zone ?? "assets"}</dd></div>
       </dl>
+      <AutodeskLink entity={entity} />
       {actionSection}
       {relationshipSection}
       <details className="world-technical"><summary>Technical details</summary><small>APS ID · {entity.externalId}</small></details>
@@ -3438,6 +3458,7 @@ function IssueDetail({ entity, projectName, actionSection, relationshipSection, 
         <div><dt>Project</dt><dd>{projectName}</dd></div>
         <div><dt>World state</dt><dd>{visualState}</dd></div>
       </dl>
+      <AutodeskLink entity={entity} />
       {actionSection}
       {relationshipSection}
       <details className="world-technical"><summary>Technical details</summary><small>APS ID · {entity.externalId}</small></details>
@@ -3471,6 +3492,7 @@ function PersonDetail({ entity, projectName, actionSection, relationshipSection,
         {details.map(([label, detailValue]) => <div key={label}><dt>{label}</dt><dd>{detailValue}</dd></div>)}
         <div><dt>Project</dt><dd>{projectName}</dd></div>
       </dl>
+      <AutodeskLink entity={entity} />
       {actionSection}
       {relationshipSection}
       <details className="world-technical"><summary>Technical details</summary><small>APS ID · {entity.externalId}</small></details>
@@ -3511,6 +3533,7 @@ function DocumentDetail({ entity, projectName, scope, relationshipSection, onClo
         <div><dt>Project</dt><dd>{projectName}</dd></div>
         {scope && <div><dt>Loaded set</dt><dd>{scope}</dd></div>}
       </dl>
+      <AutodeskLink entity={entity} />
       {relationshipSection}
       <details className="world-technical"><summary>Technical details</summary><small>APS ID · {entity.externalId}</small></details>
     </aside>
@@ -3546,6 +3569,7 @@ function RfiDetail({ entity, projectName, relationshipSection, onClose }: Entity
         {details.map(([label, detailValue]) => <div key={label}><dt>{label}</dt><dd>{detailValue}</dd></div>)}
         <div><dt>Project</dt><dd>{projectName}</dd></div>
       </dl>
+      <AutodeskLink entity={entity} />
       {relationshipSection}
       <details className="world-technical"><summary>Technical details</summary><small>APS ID · {entity.externalId}</small></details>
     </aside>
@@ -3579,6 +3603,7 @@ function FormDetail({ entity, projectName, actionSection, relationshipSection, o
         {details.map(([label, detailValue]) => <div key={label}><dt>{label}</dt><dd>{detailValue}</dd></div>)}
         <div><dt>Project</dt><dd>{projectName}</dd></div>
       </dl>
+      <AutodeskLink entity={entity} />
       {actionSection}
       {relationshipSection}
       <details className="world-technical"><summary>Technical details</summary><small>APS ID · {entity.externalId}</small></details>

@@ -784,3 +784,21 @@ h1 { margin: 18px 0; font-family: var(--font-satoshi), ui-sans-serif, sans-serif
    panel could only ever be closed once per visit. */
 .digest-reopen { display: inline-flex; align-items: center; gap: 7px; width: auto; padding: 0 11px; font-size: 11px; font-weight: 800; letter-spacing: .02em; white-space: nowrap; }
 .digest-reopen b { min-width: 17px; padding: 2px 5px; border-radius: 9px; background: var(--green); color: white; font-size: 10px; text-align: center; }
+
+/* The record's own page in Autodesk. Rendered only when APS gave a URL, so it
+   is never a link that leads nowhere. */
+.detail-external {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 16px;
+  padding: 9px 14px;
+  border: 1px solid rgba(36, 79, 66, .28);
+  border-radius: 9px;
+  color: #24503f;
+  background: #f2f7f1;
+  font-size: 11px;
+  font-weight: 800;
+  text-decoration: none;
+}
+.detail-external:hover { border-color: rgba(36, 79, 66, .55); background: #e7f0e5; }
