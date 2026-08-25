@@ -16,7 +16,20 @@ export interface SessionData {
   expiresAt?: number;
   grantedScopes?: string[];
   oauthState?: string;
+  /**
+   * The project the world treats as primary: the one a write action is created
+   * against and the one saved progress is keyed to. Always the first entry of
+   * `selectedProjects` once a selection has been made.
+   */
   selectedProject?: SelectedProject;
+  /**
+   * Every project rendered in the world, each as its own walled compound.
+   *
+   * Absent on sessions created before multi-project selection existed, which is
+   * why `worldProjects` reads through to `selectedProject` rather than making
+   * everyone pick again.
+   */
+  selectedProjects?: SelectedProject[];
   /**
    * Who saved progress belongs to. Prefixed with its source so a browser-scoped
    * fallback id can never be mistaken for an Autodesk account id.
@@ -63,4 +76,38 @@ export function sessionMayWrite(session: Pick<SessionData, "grantedScopes">): bo
   const scopes = session.grantedScopes;
   if (!scopes || scopes.length === 0) return true;
   return scopes.includes("data:write");
+}
+
+/** How many compounds one world will hold before it stops being an overview. */
+export const MAX_WORLD_PROJECTS = 6;
+
+/**
+ * Every project this session wants in the world, oldest field first.
+ *
+ * A session saved before multi-project selection only has `selectedProject`, so
+ * that is read as a one-project world rather than an empty one.
+ */
+export function worldProjects(
+  session: Pick<SessionData, "selectedProject" | "selectedProjects">,
+): SelectedProject[] {
+  const many = session.selectedProjects?.filter((project) => project?.id);
+  if (many && many.length > 0) return many.slice(0, MAX_WORLD_PROJECTS);
+  return session.selectedProject ? [session.selectedProject] : [];
+}
+
+/**
+ * The project a feed request is asking for.
+ *
+ * A request may only name a project this session actually selected. Anything
+ * else — a guessed ID, a project from another hub, a stale tab after the
+ * selection changed — resolves to nothing rather than being fetched, so the
+ * world can never read a project the reader did not choose in this session.
+ */
+export function resolveWorldProject(
+  session: Pick<SessionData, "selectedProject" | "selectedProjects">,
+  projectId: string | null,
+): SelectedProject | undefined {
+  const projects = worldProjects(session);
+  if (!projectId) return projects[0];
+  return projects.find((project) => project.id === projectId);
 }

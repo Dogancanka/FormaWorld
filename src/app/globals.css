@@ -74,6 +74,13 @@ h1 { margin: 18px 0; font-family: var(--font-satoshi), ui-sans-serif, sans-serif
 .hub-list, .project-list { display: grid; gap: 8px; margin-top: 24px; }
 .hub-option, .project-row { width: 100%; border: 1px solid transparent; background: transparent; text-align: left; display: flex; align-items: center; gap: 14px; padding: 14px; cursor: pointer; color: var(--ink); }
 .hub-option:hover, .hub-option.active, .project-row:hover { background: var(--surface); border-color: var(--line); }
+.project-row { cursor: pointer; }
+.project-row input { width: 18px; height: 18px; accent-color: var(--green); flex: none; margin: 0; }
+.project-row.selected { border-color: var(--green); background: var(--surface); box-shadow: inset 3px 0 0 var(--green); }
+.project-row[data-disabled="true"] { opacity: .45; cursor: not-allowed; }
+.picker-hint { color: var(--muted); font-size: 13px; line-height: 1.5; margin: 0 0 20px; max-width: 46ch; }
+.picker-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 22px; }
+.picker-actions small { color: var(--muted); font-size: 12px; }
 .hub-icon { width: 36px; height: 36px; display: grid; place-items: center; background: var(--green); color: white; border-radius: 4px; }
 .hub-option span:nth-child(2), .project-row span:nth-child(2) { display: grid; gap: 5px; min-width: 0; }
 .hub-option small, .project-row small { color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
@@ -694,3 +701,29 @@ h1 { margin: 18px 0; font-family: var(--font-satoshi), ui-sans-serif, sans-serif
 /* Content stands on the ground rather than behind it. */
 .shell { position: relative; }
 .shell > *:not(.world-horizon) { position: relative; z-index: 1; }
+
+/* The project name over its own compound, only when a world holds more than
+   one. Matches the HUD pill so it reads as chrome, not as a world object. */
+.compound-label {
+  display: inline-block;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: rgba(252, 251, 246, .92);
+  border: 1px solid rgba(77, 94, 101, .18);
+  box-shadow: 0 6px 18px rgba(21, 33, 29, .12);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: -.01em;
+  white-space: nowrap;
+}
+
+/* Jump to one compound in a multi-project world. */
+.stats-projects { list-style: none; margin: 0 0 14px; padding: 0 0 12px; display: grid; gap: 4px; border-bottom: 1px solid rgba(77,94,101,.14); }
+.stats-projects button { width: 100%; display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 8px 10px; border: 0; border-radius: 7px; background: transparent; color: inherit; cursor: pointer; text-align: left; }
+.stats-projects button:hover { background: rgba(34,105,88,.08); }
+.stats-projects strong { font-size: 13px; font-weight: 700; }
+.stats-projects small { color: var(--muted); font-size: 11px; white-space: nowrap; }
+
+.project-set { list-style: none; margin: 14px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.project-set li { padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); font-size: 13px; }

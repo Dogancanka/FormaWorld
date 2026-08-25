@@ -622,3 +622,58 @@ still opts out of raycasting through `ignoreRaycast`.
     table, Docker, what is and is not stored, known limits), `Dockerfile` and
     `docker-compose.yml` on Node 24 with `/data` as a volume, `.dockerignore`,
     `output: "standalone"`, and `data/` gitignored.
+
+## Phase 30 — Several projects in one world, and two auth bugs
+
+1. Two bugs with one cause. Seven feeds reconcile in parallel every thirty
+   seconds and nothing coordinated them, so when the access token was near
+   expiry all seven called the APS token endpoint with the same refresh token.
+   Autodesk rotates refresh tokens: the first call won and invalidated the one
+   the other six still held, they came back `invalid_grant`, and the old code
+   destroyed the session on *any* refresh failure. Refreshes are single-flight
+   now, keyed by the refresh token and held thirty seconds past settling so a
+   handler that read the cookie just before the rotation joins the same refresh.
+   Only a grant Autodesk rejected outright ends the session; a 5xx raises 503
+   and leaves it alone.
+2. The same parallelism explains the dead-end write prompt. APS does not always
+   echo `scope` on a token response, and both the callback and the refresh
+   recorded that silence as an empty scope list, so every write action showed
+   "Sign in again to grant APS data:write access" — and signing in again
+   produced the same empty list. An absent echo now falls back to the requested
+   scopes, and `sessionMayWrite` treats an unknown set as a question for APS
+   rather than a refusal. A list that is present and genuinely lacks
+   `data:write` is still refused locally. Ten tests.
+3. `selectedProjects` joins `selectedProject` in the session, capped at six.
+   `worldProjects` reads through to the old single field, so a session saved
+   before this phase is a one-project world rather than an empty one, and
+   `resolveWorldProject` refuses any project ID the session did not select —
+   a feed can never be talked into reading a project the reader did not choose.
+4. Every feed route takes `?projectId=`, and the two write routes take it in the
+   body, so an issue is created in the compound its composer was opened from
+   rather than in whichever project happens to be primary.
+5. The client keeps feeds *per project* and derives merged views with the same
+   shapes the HUD, inspector, digest and statistics already read
+   (`src/world/multi-project.ts`). That is what kept the change to roughly a
+   hundred call sites from being a hundred edits: selection, relationships and
+   the away digest work across compounds unchanged because entities carry their
+   own `projectId`. Merging is deliberately optimistic — one compound missing a
+   module must not report the whole world as broken — and the per-project alerts
+   still name which project failed.
+6. Each compound is measured on its own before being placed, because districts
+   come from a project's own APS asset statuses and a twelve-status workflow
+   needs a wider yard than a three-status one. `placeCompounds` lays them out
+   row-major on a squarish grid rather than a line, which a property test holds
+   to never overlapping whatever the sizes. Eleven tests.
+7. Three things found by looking at it in the browser rather than by reasoning:
+   - The compound name label used drei's `distanceFactor`, which is a
+     perspective-camera prop. Under this scene's orthographic camera it threw
+     the labels roughly 1300 world units off screen. No other `<Html>` in the
+     scene uses it; the label now matches them.
+   - `minZoom={12}` was tuned for one compound and could not frame three, so
+     Reset view clamped and cut the top compound off. The floor now follows the
+     compound count and `CameraFocus` clamps to the same number.
+   - `GroundPlane` was inside `WorldScene` and would have been drawn once per
+     project; it is one plane under the whole world now.
+8. Camera focus carries the compound it means. Flying to a record, or to a
+   digest line's district, resolves the position through that project's offset
+   instead of landing on the primary project's copy of the same district.

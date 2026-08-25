@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { ApsApiError } from "@/lib/aps/client";
 import { createWorldIssue, listIssueSubtypeOptions, listWorldIssues } from "@/lib/aps/issues";
-import { getSession, sessionMayWrite } from "@/lib/session";
+import { getSession, resolveWorldProject, sessionMayWrite } from "@/lib/session";
 import type { IssueFeed, IssueFeedState } from "@/world/issues/types";
 import type { CreateIssueInput, CreateIssueResult } from "@/world/issues/write-types";
 import { requestHasSameOrigin, validateCreateIssueInput } from "@/world/issues/write-validation";
@@ -13,14 +13,15 @@ function failureState(status: number): IssueFeedState {
   return "error";
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   const session = await getSession();
-  if (!session.selectedProject) {
+  const project = resolveWorldProject(session, new URL(request.url).searchParams.get("projectId"));
+  if (!project) {
     return NextResponse.json({ error: "Select a project first." }, { status: 409 });
   }
 
   try {
-    const result = await listWorldIssues(session.selectedProject);
+    const result = await listWorldIssues(project);
     const feed: IssueFeed = {
       state: result.total > 0 ? "available" : "empty",
       ...result,
@@ -48,22 +49,27 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Content-Type must be application/json." }, { status: 415 });
   }
   const session = await getSession();
-  if (!session.selectedProject) return NextResponse.json({ error: "Select a project first." }, { status: 409 });
   if (!sessionMayWrite(session)) {
     return NextResponse.json({
       error: "This session does not include the APS data:write scope. Sign in again before creating an issue.",
       requiresReauthentication: true,
     }, { status: 403 });
   }
-  const input: CreateIssueInput | undefined = validateCreateIssueInput(await request.json().catch(() => undefined));
+  const body = await request.json().catch(() => undefined) as Record<string, unknown> | undefined;
+  // A world can hold several compounds, so the issue is written into the one
+  // the composer was opened from rather than into whichever project happens to
+  // be primary. An unnamed project still means the primary one.
+  const project = resolveWorldProject(session, typeof body?.projectId === "string" ? body.projectId : null);
+  if (!project) return NextResponse.json({ error: "Select a project first." }, { status: 409 });
+  const input: CreateIssueInput | undefined = validateCreateIssueInput(body);
   if (!input) return NextResponse.json({ error: "Provide a title, valid issue subtype, and optional description." }, { status: 400 });
   try {
-    const allowedSubtypes = await listIssueSubtypeOptions(session.selectedProject);
+    const allowedSubtypes = await listIssueSubtypeOptions(project);
     if (!allowedSubtypes.some((subtype) => subtype.id === input.issueSubtypeId)) {
       return NextResponse.json({ error: "The selected issue subtype is not available in this project." }, { status: 400 });
     }
     if (input.assignedTo) {
-      const projectPeople = await listWorldPeople(session.selectedProject);
+      const projectPeople = await listWorldPeople(project);
       const assigneeExists = projectPeople.entities.some((person) => {
         const raw = person.metadata.raw && typeof person.metadata.raw === "object"
           ? person.metadata.raw as Record<string, unknown>
@@ -72,7 +78,7 @@ export async function POST(request: Request) {
       });
       if (!assigneeExists) return NextResponse.json({ error: "The selected assignee is not a loaded member of this project." }, { status: 400 });
     }
-    const issue = await createWorldIssue(session.selectedProject, input);
+    const issue = await createWorldIssue(project, input);
     const result: CreateIssueResult = { issue, confirmedByAps: true };
     return NextResponse.json(result, { status: 201 });
   } catch (cause) {

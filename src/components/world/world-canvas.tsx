@@ -27,6 +27,12 @@ import type { ExecuteWorldActionInput, ExecuteWorldActionResult, WorldActionCapa
 import { shouldRefreshOnVisibilityChange, syncIntervalForVisibility, type WorldSyncTrigger } from "@/world/sync/policy";
 import { segmentIntersectsZone, type PositionedZone } from "@/world/spatial";
 import {
+  mergeEntityFeeds,
+  placeCompounds,
+  type CompoundPlacement,
+  type WorldProjectRef,
+} from "@/world/multi-project";
+import {
   compoundBounds,
   compoundGates,
   districtPaths,
@@ -57,66 +63,88 @@ import type { MapControls as MapControlsImpl } from "three-stdlib";
 type FocusRequest = {
   zoneId: ZoneId;
   serial: number;
+  /** Which compound the zone belongs to; the primary one when absent. */
+  projectId?: string;
   target?: [number, number];
   zoom?: number;
   fit?: [number, number];
 };
 type SyncState = "idle" | "syncing" | "current" | "partial_error";
 
-async function fetchAssetFeed(): Promise<AssetFeed> {
-  const response = await fetch("/api/world/assets", { cache: "no-store", headers: { Accept: "application/json" } });
+// Shapes the merge falls back to. A merged feed only ever borrows the fields a
+// domain does not aggregate, so these are never shown as data.
+const EMPTY_ASSET_FEED: AssetFeed = { state: "empty", entities: [], total: 0, limit: 25, statuses: [], categories: [] };
+const EMPTY_ISSUE_FEED: IssueFeed = { state: "empty", entities: [], total: 0, limit: 50 };
+const EMPTY_PEOPLE_FEED: PeopleFeed = { state: "empty", entities: [], total: 0, limit: 50 };
+const EMPTY_DOCUMENT_FEED: DocumentFeed = { state: "empty", entities: [], total: 0, limit: 50, scope: "Top-level folders and the first accessible folder" };
+const EMPTY_FORM_FEED: FormFeed = { state: "empty", entities: [], total: 0, limit: 25 };
+const EMPTY_RFI_FEED: RfiFeed = { state: "empty", entities: [], total: 0, limit: 50 };
+
+/**
+ * A world can hold several compounds, so every read names its project. The
+ * server falls back to the primary project when the parameter is absent, which
+ * is what keeps a one-project world working unchanged.
+ */
+function feedUrl(path: string, projectId?: string): string {
+  return projectId ? `${path}?projectId=${encodeURIComponent(projectId)}` : path;
+}
+
+async function fetchAssetFeed(projectId?: string): Promise<AssetFeed> {
+  const response = await fetch(feedUrl("/api/world/assets", projectId), { cache: "no-store", headers: { Accept: "application/json" } });
   if (!response.ok) throw new Error(`Asset request failed with HTTP ${response.status}.`);
   return response.json() as Promise<AssetFeed>;
 }
 
-async function fetchIssueFeed(): Promise<IssueFeed> {
-  const response = await fetch("/api/world/issues", { cache: "no-store", headers: { Accept: "application/json" } });
+async function fetchIssueFeed(projectId?: string): Promise<IssueFeed> {
+  const response = await fetch(feedUrl("/api/world/issues", projectId), { cache: "no-store", headers: { Accept: "application/json" } });
   if (!response.ok) throw new Error(`Issue request failed with HTTP ${response.status}.`);
   return response.json() as Promise<IssueFeed>;
 }
 
-async function fetchPeopleFeed(): Promise<PeopleFeed> {
-  const response = await fetch("/api/world/people", { cache: "no-store", headers: { Accept: "application/json" } });
+async function fetchPeopleFeed(projectId?: string): Promise<PeopleFeed> {
+  const response = await fetch(feedUrl("/api/world/people", projectId), { cache: "no-store", headers: { Accept: "application/json" } });
   if (!response.ok) throw new Error(`People request failed with HTTP ${response.status}.`);
   return response.json() as Promise<PeopleFeed>;
 }
 
-async function fetchDocumentFeed(): Promise<DocumentFeed> {
-  const response = await fetch("/api/world/documents", { cache: "no-store", headers: { Accept: "application/json" } });
+async function fetchDocumentFeed(projectId?: string): Promise<DocumentFeed> {
+  const response = await fetch(feedUrl("/api/world/documents", projectId), { cache: "no-store", headers: { Accept: "application/json" } });
   if (!response.ok) throw new Error(`Document request failed with HTTP ${response.status}.`);
   return response.json() as Promise<DocumentFeed>;
 }
 
-async function fetchRfiFeed(): Promise<RfiFeed> {
-  const response = await fetch("/api/world/rfis", { cache: "no-store" });
+async function fetchRfiFeed(projectId?: string): Promise<RfiFeed> {
+  const response = await fetch(feedUrl("/api/world/rfis", projectId), { cache: "no-store" });
   const payload = await response.json();
   if (!response.ok) throw new Error(payload?.error ?? `RFIs failed with HTTP ${response.status}.`);
   return payload as RfiFeed;
 }
 
-async function fetchFormFeed(): Promise<FormFeed> {
-  const response = await fetch("/api/world/forms", { cache: "no-store", headers: { Accept: "application/json" } });
+async function fetchFormFeed(projectId?: string): Promise<FormFeed> {
+  const response = await fetch(feedUrl("/api/world/forms", projectId), { cache: "no-store", headers: { Accept: "application/json" } });
   if (!response.ok) throw new Error(`Forms request failed with HTTP ${response.status}.`);
   return response.json() as Promise<FormFeed>;
 }
 
-async function fetchRelationshipFeed(): Promise<RelationshipFeed> {
-  const response = await fetch("/api/world/relationships", { cache: "no-store", headers: { Accept: "application/json" } });
+async function fetchRelationshipFeed(projectId?: string): Promise<RelationshipFeed> {
+  const response = await fetch(feedUrl("/api/world/relationships", projectId), { cache: "no-store", headers: { Accept: "application/json" } });
   if (!response.ok) throw new Error(`Relationship request failed with HTTP ${response.status}.`);
   return response.json() as Promise<RelationshipFeed>;
 }
 
-async function fetchIssueCreateOptions(): Promise<IssueCreateOptions> {
-  const response = await fetch("/api/world/issue-options", { cache: "no-store", headers: { Accept: "application/json" } });
+async function fetchIssueCreateOptions(projectId?: string): Promise<IssueCreateOptions> {
+  const response = await fetch(feedUrl("/api/world/issue-options", projectId), { cache: "no-store", headers: { Accept: "application/json" } });
   if (!response.ok) throw new Error(`Issue options request failed with HTTP ${response.status}.`);
   return response.json() as Promise<IssueCreateOptions>;
 }
 
-async function postIssue(input: CreateIssueInput): Promise<CreateIssueResult> {
+async function postIssue(input: CreateIssueInput, projectId?: string): Promise<CreateIssueResult> {
   const response = await fetch("/api/world/issues", {
     method: "POST",
     headers: { Accept: "application/json", "Content-Type": "application/json" },
-    body: JSON.stringify(input),
+    // The issue is created in the compound the composer was opened from, which
+    // in a multi-project world is not necessarily the primary project.
+    body: JSON.stringify({ ...input, projectId }),
   });
   const payload = await response.json().catch(() => ({})) as CreateIssueResult & { error?: string; requiresReauthentication?: boolean };
   if (!response.ok) {
@@ -129,16 +157,21 @@ async function postIssue(input: CreateIssueInput): Promise<CreateIssueResult> {
 
 async function fetchWorldActionOptions(entity: WorldEntity): Promise<WorldActionOptions> {
   const query = new URLSearchParams({ entityType: entity.type, entityId: entity.externalId });
+  if (entity.projectId) query.set("projectId", entity.projectId);
   const response = await fetch(`/api/world/actions?${query}`, { cache: "no-store", headers: { Accept: "application/json" } });
   if (!response.ok) throw new Error(`World actions request failed with HTTP ${response.status}.`);
   return response.json() as Promise<WorldActionOptions>;
 }
 
-async function executeWorldAction(input: ExecuteWorldActionInput): Promise<ExecuteWorldActionResult> {
+async function executeWorldAction(
+  input: ExecuteWorldActionInput,
+  projectId?: string,
+): Promise<ExecuteWorldActionResult> {
   const response = await fetch("/api/world/actions", {
     method: "POST",
     headers: { Accept: "application/json", "Content-Type": "application/json" },
-    body: JSON.stringify(input),
+    // The record being changed belongs to one compound; the mutation follows it.
+    body: JSON.stringify({ ...input, projectId }),
   });
   const payload = await response.json().catch(() => ({})) as ExecuteWorldActionResult & { error?: string; requiresReauthentication?: boolean };
   if (!response.ok) {
@@ -149,16 +182,71 @@ async function executeWorldAction(input: ExecuteWorldActionInput): Promise<Execu
   return payload;
 }
 
-export default function WorldCanvas({ projectName, projectId }: { projectName: string; projectId: string }) {
+/** Everything one compound has read from APS. */
+interface ProjectFeeds {
+  project: WorldProjectRef;
+  assets?: AssetFeed;
+  issues?: IssueFeed;
+  people?: PeopleFeed;
+  documents?: DocumentFeed;
+  forms?: FormFeed;
+  rfis?: RfiFeed;
+  relationships?: RelationshipFeed;
+}
+
+export default function WorldCanvas({ projects }: { projects: WorldProjectRef[] }) {
+  // The project a write is created against and the one saved progress is keyed
+  // to. The others are read-only company in the same world.
+  const primary = projects[0];
+  const projectName = primary?.name ?? "";
+  const projectId = primary?.id ?? "";
   const [selectedId, setSelectedId] = useState<ZoneId | null>("hub");
   const [panelOpen, setPanelOpen] = useState(false);
-  const [assetFeed, setAssetFeed] = useState<AssetFeed>();
-  const [issueFeed, setIssueFeed] = useState<IssueFeed>();
-  const [peopleFeed, setPeopleFeed] = useState<PeopleFeed>();
-  const [documentFeed, setDocumentFeed] = useState<DocumentFeed>();
-  const [formFeed, setFormFeed] = useState<FormFeed>();
-  const [rfiFeed, setRfiFeed] = useState<RfiFeed>();
-  const [relationshipFeed, setRelationshipFeed] = useState<RelationshipFeed>();
+  // Feeds are held per project, because districts are laid out from a project's
+  // own APS asset statuses and each compound has its own wall. Everything that
+  // talks about "the world" — the HUD, the inspector, the digest, the
+  // statistics — reads the merged views below instead, so it keeps working over
+  // however many projects the reader picked.
+  const [byProject, setByProject] = useState<ProjectFeeds[]>(
+    () => projects.map((project) => ({ project })),
+  );
+  const assetFeed = useMemo(
+    () => mergeEntityFeeds(byProject.map((entry) => entry.assets), EMPTY_ASSET_FEED),
+    [byProject],
+  );
+  const issueFeed = useMemo(
+    () => mergeEntityFeeds(byProject.map((entry) => entry.issues), EMPTY_ISSUE_FEED),
+    [byProject],
+  );
+  const peopleFeed = useMemo(
+    () => mergeEntityFeeds(byProject.map((entry) => entry.people), EMPTY_PEOPLE_FEED),
+    [byProject],
+  );
+  const documentFeed = useMemo(
+    () => mergeEntityFeeds(byProject.map((entry) => entry.documents), EMPTY_DOCUMENT_FEED),
+    [byProject],
+  );
+  const formFeed = useMemo(
+    () => mergeEntityFeeds(byProject.map((entry) => entry.forms), EMPTY_FORM_FEED),
+    [byProject],
+  );
+  const rfiFeed = useMemo(
+    () => mergeEntityFeeds(byProject.map((entry) => entry.rfis), EMPTY_RFI_FEED),
+    [byProject],
+  );
+  const relationshipFeed = useMemo(() => {
+    const present = byProject.map((entry) => entry.relationships).filter(Boolean) as RelationshipFeed[];
+    if (present.length === 0) return undefined;
+    if (present.length === 1) return present[0];
+    const failed = present.find((entry) => entry.error);
+    return {
+      state: present.some((entry) => entry.state === "available") ? "available" as const : present[0].state,
+      relationships: present.flatMap((entry) => entry.relationships),
+      total: present.reduce((sum, entry) => sum + entry.total, 0),
+      error: failed?.error,
+      httpStatus: failed?.httpStatus,
+    };
+  }, [byProject]);
   const [focusRequest, setFocusRequest] = useState<FocusRequest>();
   const [selectedEntityId, setSelectedEntityId] = useState<string>();
   const [relationshipFocusEntityId, setRelationshipFocusEntityId] = useState<string>();
@@ -176,7 +264,12 @@ export default function WorldCanvas({ projectName, projectId }: { projectName: s
   const [navMenuOpen, setNavMenuOpen] = useState(false);
   const [activityOpen, setActivityOpen] = useState(false);
   const [hasInteracted, setHasInteracted] = useState(false);
-  const issueSnapshotRef = useRef<WorldEntity[] | undefined>(undefined);
+  // Issue activity is diffed per project: one compound's records must never be
+  // compared against another's.
+  const issueSnapshotRef = useRef<Map<string, WorldEntity[]>>(new Map());
+  // The reconciliation loop reads the project list through a ref so a re-render
+  // never rebuilds the interval that drives it.
+  const projectsRef = useRef(projects);
   const syncInFlightRef = useRef<Promise<void> | null>(null);
   const activityAutoCloseRef = useRef<number | undefined>(undefined);
   const mountedRef = useRef(true);
@@ -212,6 +305,58 @@ export default function WorldCanvas({ projectName, projectId }: { projectName: s
   ), [assetFeed, assetEntities, assetCategories]);
   const zones = useMemo(() => worldZones(assetYard.size), [assetYard]);
   const renderPositions = useMemo(() => zonePositions(zones), [zones]);
+
+  /**
+   * One walled compound per project, side by side on open ground.
+   *
+   * Districts are laid out from a project's own APS asset statuses, so each
+   * compound is measured on its own and only then placed: a project with a
+   * twelve-status workflow gets a wider yard than one with three, and the
+   * placement leaves room for it instead of overlapping its neighbour.
+   */
+  const compounds = useMemo(() => {
+    const built = byProject.map((entry) => {
+      const entities = entry.assets?.entities ?? [];
+      const categories = entry.assets?.categories ?? [];
+      const yard = layoutAssetYard(
+        entry.assets?.statuses ?? [],
+        entities,
+        (entity) => assetStatusIdOf(entity),
+        (entity) => assetLook(entity, categories).key,
+      );
+      const compoundZones = worldZones(yard.size);
+      const positions = zonePositions(compoundZones);
+      const bounds = compoundBounds(compoundZones, positions);
+      return { entry, yard, categories, zones: compoundZones, positions, bounds };
+    });
+    const placements = placeCompounds(built.map((compound) => ({
+      projectId: compound.entry.project.id,
+      halfWidth: (compound.bounds.maxX - compound.bounds.minX) / 2 + 1,
+      halfDepth: (compound.bounds.maxZ - compound.bounds.minZ) / 2 + 1,
+    })));
+    const offsets = new Map<string, CompoundPlacement["offset"]>(
+      placements.map((placement) => [placement.projectId, placement.offset]),
+    );
+    return built.map((compound) => {
+      const [placedX, placedZ] = offsets.get(compound.entry.project.id) ?? [0, 0];
+      // Compounds are measured around their own origin, which is not exactly
+      // their centre, so the group is shifted by the difference to land the
+      // compound's middle on the placement point.
+      const offset: [number, number] = [
+        placedX - (compound.bounds.minX + compound.bounds.maxX) / 2,
+        placedZ - (compound.bounds.minZ + compound.bounds.maxZ) / 2,
+      ];
+      return { ...compound, offset };
+    });
+  }, [byProject]);
+
+  /** Where a district actually is in world space, compound offset included. */
+  const zoneWorldTarget = useCallback((zoneId: ZoneId, ownerId?: string): [number, number] => {
+    const compound = compounds.find((candidate) => candidate.entry.project.id === ownerId) ?? compounds[0];
+    const position = compound?.positions[zoneId] ?? renderPositions[zoneId];
+    if (!position) return [0, 0];
+    return [position[0] + (compound?.offset[0] ?? 0), position[2] + (compound?.offset[1] ?? 0)];
+  }, [compounds, renderPositions]);
   const selectedZone = zones.find((zone) => zone.id === selectedId);
   const selectedZoneEntities = useMemo(() => {
     if (!selectedId || selectedId === "hub") return allEntities;
@@ -250,16 +395,45 @@ export default function WorldCanvas({ projectName, projectId }: { projectName: s
   // Progress belongs to the reader, not to the project data, so it lives in its
   // own store and survives a reload of the world.
   const progression = useProgression(projectId);
-  const worldBounds = useMemo(() => compoundBounds(zones, renderPositions), [zones, renderPositions]);
+  // Reset view frames the whole world, which with several projects means every
+  // compound and the ground between them.
+  const worldBounds = useMemo(() => {
+    if (compounds.length === 0) return compoundBounds(zones, renderPositions);
+    return compounds.reduce((total, compound) => ({
+      minX: Math.min(total.minX, compound.bounds.minX + compound.offset[0]),
+      maxX: Math.max(total.maxX, compound.bounds.maxX + compound.offset[0]),
+      minZ: Math.min(total.minZ, compound.bounds.minZ + compound.offset[1]),
+      maxZ: Math.max(total.maxZ, compound.bounds.maxZ + compound.offset[1]),
+    }), {
+      minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity,
+    } as CompoundBounds);
+  }, [compounds, renderPositions, zones]);
+
+  /**
+   * Reset view frames this rather than `worldBounds` itself. A wall drawn
+   * exactly on the edge of the frame reads as a compound running off the
+   * screen, so the fit is given a margin of open ground on every side.
+   */
+  const minZoom = useMemo(
+    () => Math.max(4, 12 / Math.sqrt(Math.max(1, compounds.length))),
+    [compounds.length],
+  );
+
+  const framedBounds = useMemo<CompoundBounds>(() => ({
+    minX: worldBounds.minX - 5,
+    maxX: worldBounds.maxX + 5,
+    minZ: worldBounds.minZ - 5,
+    maxZ: worldBounds.maxZ + 5,
+  }), [worldBounds]);
 
   const resetView = useCallback(() => {
     setFocusRequest({
       zoneId: "hub",
       serial: Date.now(),
-      target: [(worldBounds.minX + worldBounds.maxX) / 2, (worldBounds.minZ + worldBounds.maxZ) / 2],
-      fit: [worldBounds.maxX - worldBounds.minX, worldBounds.maxZ - worldBounds.minZ],
+      target: [(framedBounds.minX + framedBounds.maxX) / 2, (framedBounds.minZ + framedBounds.maxZ) / 2],
+      fit: [framedBounds.maxX - framedBounds.minX, framedBounds.maxZ - framedBounds.minZ],
     });
-  }, [worldBounds]);
+  }, [framedBounds]);
 
   // The state the world is in right now, in the shape the next visit will be
   // diffed against. Rebuilt on every reconciliation so the snapshot stored when
@@ -326,7 +500,13 @@ export default function WorldCanvas({ projectName, projectId }: { projectName: s
     setSelectedEntityId(undefined);
     setRelationshipFocusEntityId(undefined);
     setPanelOpen(true);
-    setFocusRequest({ zoneId: event.zone, serial: Date.now() });
+    const owner = allEntities.find((entity) => event.entityIds.includes(entity.id))?.projectId;
+    setFocusRequest({
+      zoneId: event.zone,
+      serial: Date.now(),
+      projectId: owner,
+      target: zoneWorldTarget(event.zone, owner),
+    });
   };
 
   const acknowledgeAway = (event: AwayEvent) => {
@@ -366,7 +546,14 @@ export default function WorldCanvas({ projectName, projectId }: { projectName: s
     const zone = entity.zone ?? `${entity.type}s`;
     setSelectedId(zone);
     setPanelOpen(true);
-    setFocusRequest({ zoneId: zone, serial: Date.now() });
+    // The record belongs to one compound, so the camera flies to that
+    // compound's district rather than to the primary project's copy of it.
+    setFocusRequest({
+      zoneId: zone,
+      serial: Date.now(),
+      projectId: entity.projectId,
+      target: zoneWorldTarget(zone, entity.projectId),
+    });
   };
 
   const locateAllPersonIssues = () => {
@@ -385,149 +572,176 @@ export default function WorldCanvas({ projectName, projectId }: { projectName: s
     });
   };
 
+  /** Patch one compound's slot, leaving every other project untouched. */
+  const updateProject = useCallback((
+    id: string,
+    update: (entry: ProjectFeeds) => ProjectFeeds,
+  ) => {
+    setByProject((current) => current.map((entry) => entry.project.id === id ? update(entry) : entry));
+  }, []);
+
   const reconcileCreatedIssue = async (created: WorldEntity) => {
-    issueSnapshotRef.current = [created, ...(issueSnapshotRef.current ?? []).filter((entity) => entity.id !== created.id)];
-    setIssueFeed((current) => {
+    const owner = created.projectId || projectId;
+    issueSnapshotRef.current.set(owner, [
+      created,
+      ...(issueSnapshotRef.current.get(owner) ?? []).filter((entity) => entity.id !== created.id),
+    ]);
+    updateProject(owner, (entry) => {
+      const current = entry.issues;
       const withoutCreated = (current?.entities ?? []).filter((entity) => entity.id !== created.id);
       return {
-        state: "available",
-        entities: [created, ...withoutCreated].slice(0, current?.limit ?? 50),
-        total: Math.max(current?.total ?? 0, withoutCreated.length + 1),
-        limit: current?.limit ?? 50,
+        ...entry,
+        issues: {
+          state: "available",
+          entities: [created, ...withoutCreated].slice(0, current?.limit ?? 50),
+          total: Math.max(current?.total ?? 0, withoutCreated.length + 1),
+          limit: current?.limit ?? 50,
+        },
       };
     });
     locateEntity(created);
     try {
-      let refreshed = await fetchIssueFeed();
+      let refreshed = await fetchIssueFeed(owner);
       if (!refreshed.entities.some((entity) => entity.id === created.id)) {
         const entities = [created, ...refreshed.entities].slice(0, refreshed.limit);
         refreshed = { ...refreshed, entities, total: Math.max(refreshed.total, entities.length) };
       }
-      issueSnapshotRef.current = refreshed.entities;
-      setIssueFeed(refreshed);
+      issueSnapshotRef.current.set(owner, refreshed.entities);
+      updateProject(owner, (entry) => ({ ...entry, issues: refreshed }));
     } catch {
       // The confirmed POST response remains authoritative when immediate refetch is unavailable.
     }
   };
 
   const reconcileMutatedEntity = async (entity: WorldEntity) => {
+    const owner = entity.projectId || projectId;
     const replace = <T extends { entities: WorldEntity[] }>(current: T | undefined): T | undefined => current
       ? { ...current, entities: current.entities.map((candidate) => candidate.id === entity.id ? entity : candidate) }
       : current;
-    if (entity.type === "asset") setAssetFeed((current) => replace(current));
+    updateProject(owner, (entry) => ({
+      ...entry,
+      assets: entity.type === "asset" ? replace(entry.assets) : entry.assets,
+      issues: entity.type === "issue" ? replace(entry.issues) : entry.issues,
+      forms: entity.type === "form" ? replace(entry.forms) : entry.forms,
+    }));
     if (entity.type === "issue") {
-      setIssueFeed((current) => replace(current));
-      issueSnapshotRef.current = (issueSnapshotRef.current ?? []).map((candidate) => candidate.id === entity.id ? entity : candidate);
+      issueSnapshotRef.current.set(owner, (issueSnapshotRef.current.get(owner) ?? [])
+        .map((candidate) => candidate.id === entity.id ? entity : candidate));
     }
-    if (entity.type === "form") setFormFeed((current) => replace(current));
     setSelectedEntityId(entity.id);
     setSelectedId(entity.zone ?? `${entity.type}s`);
     setPanelOpen(true);
     try {
-      if (entity.type === "asset") setAssetFeed(await fetchAssetFeed());
-      if (entity.type === "issue") {
-        const feed = await fetchIssueFeed();
-        issueSnapshotRef.current = feed.entities;
-        setIssueFeed(feed);
+      if (entity.type === "asset") {
+        const feed = await fetchAssetFeed(owner);
+        updateProject(owner, (entry) => ({ ...entry, assets: feed }));
       }
-      if (entity.type === "form") setFormFeed(await fetchFormFeed());
+      if (entity.type === "issue") {
+        const feed = await fetchIssueFeed(owner);
+        issueSnapshotRef.current.set(owner, feed.entities);
+        updateProject(owner, (entry) => ({ ...entry, issues: feed }));
+      }
+      if (entity.type === "form") {
+        const feed = await fetchFormFeed(owner);
+        updateProject(owner, (entry) => ({ ...entry, forms: feed }));
+      }
     } catch {
       // The APS-confirmed mutation response remains visible until the next sync.
     }
   };
 
+  /**
+   * Read one compound. Every project reconciles on the same cycle and reports
+   * its own failures, so one project missing a module — or answering 504 — never
+   * empties the districts of the projects standing next to it.
+   */
+  const refreshProject = useCallback(async (project: WorldProjectRef): Promise<boolean> => {
+    const id = project.id;
+    const [assets, issues, people, documents, forms, rfis, relationships] = await Promise.allSettled([
+      fetchAssetFeed(id),
+      fetchIssueFeed(id),
+      fetchPeopleFeed(id),
+      fetchDocumentFeed(id),
+      fetchFormFeed(id),
+      fetchRfiFeed(id),
+      fetchRelationshipFeed(id),
+    ]);
+    if (!mountedRef.current) return false;
+
+    const failed = [assets, issues, people, documents, forms, rfis, relationships]
+      .some((result) => result.status === "rejected" || !isSuccessfulFeed(result.value));
+
+    if (issues.status === "fulfilled") {
+      // Activity is diffed within a project. Comparing one project's issues to
+      // another's would report every record as new the moment a compound loaded.
+      const previous = issueSnapshotRef.current.get(id);
+      if (previous) {
+        const detected = detectIssueActivity(previous, issues.value.entities);
+        if (detected.length) {
+          setActivityEvents((current) => {
+            const known = new Set(current.map((event) => event.id));
+            return [...detected.filter((event) => !known.has(event.id)), ...current].slice(0, 12);
+          });
+          peekActivity();
+        }
+      }
+      issueSnapshotRef.current.set(id, issues.value.entities);
+    }
+
+    updateProject(id, (entry) => ({
+      ...entry,
+      assets: assets.status === "fulfilled" ? assets.value : keepLastKnown(entry.assets, {
+        state: "error", entities: [], total: 0, limit: 25, statuses: [], categories: [],
+        error: errorMessage(assets.reason, "Assets could not be loaded."),
+      }),
+      issues: issues.status === "fulfilled" ? issues.value : keepLastKnown(entry.issues, {
+        state: "error", entities: [], total: 0, limit: 50,
+        error: errorMessage(issues.reason, "Issues could not be loaded."),
+      }),
+      people: people.status === "fulfilled" ? people.value : keepLastKnown(entry.people, {
+        state: "error", entities: [], total: 0, limit: 100,
+        error: errorMessage(people.reason, "Project users could not be loaded."),
+      }),
+      documents: documents.status === "fulfilled" ? documents.value : keepLastKnown(entry.documents, {
+        state: "error", entities: [], total: 0, limit: 25,
+        scope: "Top-level folders and the first accessible folder",
+        error: errorMessage(documents.reason, "Documents could not be loaded."),
+      }),
+      forms: forms.status === "fulfilled" ? forms.value : keepLastKnown(entry.forms, {
+        state: "error", entities: [], total: 0, limit: 25,
+        error: errorMessage(forms.reason, "Forms could not be loaded."),
+      }),
+      rfis: rfis.status === "fulfilled" ? rfis.value : keepLastKnown(entry.rfis, {
+        state: "error", entities: [], total: 0, limit: 50,
+        error: errorMessage(rfis.reason, "RFIs could not be loaded."),
+      }),
+      relationships: relationships.status === "fulfilled" ? relationships.value : {
+        state: "error", relationships: [], total: 0,
+        error: errorMessage(relationships.reason, "Relationships could not be loaded."),
+      },
+    }));
+    return failed;
+  }, [updateProject]);
+
   const refreshWorld = useCallback((trigger: WorldSyncTrigger): Promise<void> => {
     if (syncInFlightRef.current) return syncInFlightRef.current;
     if (mountedRef.current) setSyncState("syncing");
 
-    const request = Promise.allSettled([
-      fetchAssetFeed(),
-      fetchIssueFeed(),
-      fetchPeopleFeed(),
-      fetchDocumentFeed(),
-      fetchFormFeed(),
-      fetchRfiFeed(),
-      fetchRelationshipFeed(),
-    ]).then(([assets, issues, people, documents, forms, rfis, relationships]) => {
-      if (!mountedRef.current) return;
-      let failed = [assets, issues, people, documents, forms, rfis, relationships]
-        .some((result) => result.status === "rejected" || !isSuccessfulFeed(result.value));
-      if (assets.status === "fulfilled") setAssetFeed(assets.value);
-      else {
-        failed = true;
-        setAssetFeed((current) => keepLastKnown(current, {
-          state: "error", entities: [], total: 0, limit: 25, statuses: [], categories: [],
-          error: errorMessage(assets.reason, "Assets could not be loaded."),
-        }));
-      }
-      if (issues.status === "fulfilled") {
-        const previous = issueSnapshotRef.current;
-        if (previous) {
-          const detected = detectIssueActivity(previous, issues.value.entities);
-          if (detected.length) {
-            setActivityEvents((current) => {
-              const known = new Set(current.map((event) => event.id));
-              return [...detected.filter((event) => !known.has(event.id)), ...current].slice(0, 12);
-            });
-            peekActivity();
-          }
+    const request = Promise.all(projectsRef.current.map((project) => refreshProject(project)))
+      .then((results) => {
+        if (!mountedRef.current) return;
+        setLastSyncedAt(Date.now());
+        setSyncState(results.some(Boolean) ? "partial_error" : "current");
+        if (trigger !== "interval") {
+          console.info(`World reconciliation completed (${trigger}) for ${results.length} project(s).`);
         }
-        issueSnapshotRef.current = issues.value.entities;
-        setIssueFeed(issues.value);
-      } else {
-        failed = true;
-        setIssueFeed((current) => keepLastKnown(current, {
-          state: "error", entities: [], total: 0, limit: 50,
-          error: errorMessage(issues.reason, "Issues could not be loaded."),
-        }));
-      }
-      if (people.status === "fulfilled") setPeopleFeed(people.value);
-      else {
-        failed = true;
-        setPeopleFeed((current) => keepLastKnown(current, {
-          state: "error", entities: [], total: 0, limit: 100,
-          error: errorMessage(people.reason, "Project users could not be loaded."),
-        }));
-      }
-      if (documents.status === "fulfilled") setDocumentFeed(documents.value);
-      else {
-        failed = true;
-        setDocumentFeed((current) => keepLastKnown(current, {
-          state: "error", entities: [], total: 0, limit: 25,
-          scope: "Top-level folders and the first accessible folder",
-          error: errorMessage(documents.reason, "Documents could not be loaded."),
-        }));
-      }
-      if (forms.status === "fulfilled") setFormFeed(forms.value);
-      else {
-        failed = true;
-        setFormFeed((current) => keepLastKnown(current, {
-          state: "error", entities: [], total: 0, limit: 25,
-          error: errorMessage(forms.reason, "Forms could not be loaded."),
-        }));
-      }
-      if (rfis.status === "fulfilled") setRfiFeed(rfis.value);
-      else {
-        failed = true;
-        setRfiFeed((current) => keepLastKnown(current, {
-          state: "error", entities: [], total: 0, limit: 50,
-          error: errorMessage(rfis.reason, "RFIs could not be loaded."),
-        }));
-      }
-      if (relationships.status === "fulfilled") setRelationshipFeed(relationships.value);
-      else {
-        failed = true;
-        setRelationshipFeed({ state: "error", relationships: [], total: 0, error: errorMessage(relationships.reason, "Relationships could not be loaded.") });
-      }
-      setLastSyncedAt(Date.now());
-      setSyncState(failed ? "partial_error" : "current");
-      if (trigger !== "interval") console.info(`World reconciliation completed (${trigger}).`);
-    }).finally(() => {
-      syncInFlightRef.current = null;
-    });
+      })
+      .finally(() => {
+        syncInFlightRef.current = null;
+      });
     syncInFlightRef.current = request;
     return request;
-  }, []);
+  }, [refreshProject]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -591,63 +805,78 @@ export default function WorldCanvas({ projectName, projectId }: { projectName: s
           shadow-camera-bottom={-34}
           shadow-bias={-0.0004}
         />
-        <WorldScene
-          selectedId={selectedId}
-          positions={renderPositions}
-          zones={zones}
-          onSelect={selectZone}
-          onFocus={focusZone}
-          assets={assetEntities}
-          assetCategories={assetCategories}
-          assetYard={assetYard}
-          issues={issueFeed?.entities ?? []}
-          rfis={rfiFeed?.entities ?? []}
-          people={peopleFeed?.entities ?? []}
-          documents={documentFeed?.entities ?? []}
-          forms={formFeed?.entities ?? []}
-          relationships={resolvedRelationships}
-          relationshipFocusEntityId={relationshipFocusEntityId}
-          workerActivity={workerActivity}
-          selectedEntityId={selectedEntityId}
-          highlightedIds={revealedIds}
-          onAssetSelect={(asset) => {
-            setSelectedEntityId(asset.id);
-            setRelationshipFocusEntityId(undefined);
-            if (asset.zone) setSelectedId(asset.zone);
-            setPanelOpen(true);
-          }}
-          onIssueSelect={(issue) => {
-            setSelectedEntityId(issue.id);
-            setRelationshipFocusEntityId(undefined);
-            setSelectedId("issues");
-            setPanelOpen(true);
-          }}
-          onRfiSelect={(rfi) => {
-            setSelectedEntityId(rfi.id);
-            setRelationshipFocusEntityId(undefined);
-            setSelectedId("rfis");
-            setPanelOpen(true);
-          }}
-          onPersonSelect={(person) => {
-            setSelectedEntityId(person.id);
-            setRelationshipFocusEntityId(undefined);
-            setSelectedId("people");
-            setPanelOpen(true);
-          }}
-          onDocumentSelect={(document) => {
-            setSelectedEntityId(document.id);
-            setRelationshipFocusEntityId(undefined);
-            setSelectedId("documents");
-            setPanelOpen(true);
-          }}
-          onFormSelect={(form) => {
-            setSelectedEntityId(form.id);
-            setRelationshipFocusEntityId(undefined);
-            setSelectedId("forms");
-            setPanelOpen(true);
-          }}
-        />
-        <CameraFocus request={focusRequest} controlsRef={controlsRef} zones={zones} positions={renderPositions} />
+        {/* The ground is one plane under every compound, so it is drawn here
+            rather than once per project. */}
+        <GroundPlane />
+        {compounds.map((compound) => (
+          <group
+            key={compound.entry.project.id}
+            position={[compound.offset[0], 0, compound.offset[1]]}
+          >
+            <CompoundLabel
+              name={compound.entry.project.name}
+              bounds={compound.bounds}
+              visible={compounds.length > 1}
+            />
+            <WorldScene
+              selectedId={selectedId}
+              positions={compound.positions}
+              zones={compound.zones}
+              onSelect={selectZone}
+              onFocus={focusZone}
+              assets={compound.entry.assets?.entities ?? []}
+              assetCategories={compound.categories}
+              assetYard={compound.yard}
+              issues={compound.entry.issues?.entities ?? []}
+              rfis={compound.entry.rfis?.entities ?? []}
+              people={compound.entry.people?.entities ?? []}
+              documents={compound.entry.documents?.entities ?? []}
+              forms={compound.entry.forms?.entities ?? []}
+              relationships={resolvedRelationships}
+              relationshipFocusEntityId={relationshipFocusEntityId}
+              workerActivity={workerActivity}
+              selectedEntityId={selectedEntityId}
+              highlightedIds={revealedIds}
+              onAssetSelect={(asset) => {
+                setSelectedEntityId(asset.id);
+                setRelationshipFocusEntityId(undefined);
+                if (asset.zone) setSelectedId(asset.zone);
+                setPanelOpen(true);
+              }}
+              onIssueSelect={(issue) => {
+                setSelectedEntityId(issue.id);
+                setRelationshipFocusEntityId(undefined);
+                setSelectedId("issues");
+                setPanelOpen(true);
+              }}
+              onRfiSelect={(rfi) => {
+                setSelectedEntityId(rfi.id);
+                setRelationshipFocusEntityId(undefined);
+                setSelectedId("rfis");
+                setPanelOpen(true);
+              }}
+              onPersonSelect={(person) => {
+                setSelectedEntityId(person.id);
+                setRelationshipFocusEntityId(undefined);
+                setSelectedId("people");
+                setPanelOpen(true);
+              }}
+              onDocumentSelect={(document) => {
+                setSelectedEntityId(document.id);
+                setRelationshipFocusEntityId(undefined);
+                setSelectedId("documents");
+                setPanelOpen(true);
+              }}
+              onFormSelect={(form) => {
+                setSelectedEntityId(form.id);
+                setRelationshipFocusEntityId(undefined);
+                setSelectedId("forms");
+                setPanelOpen(true);
+              }}
+            />
+          </group>
+        ))}
+        <CameraFocus request={focusRequest} controlsRef={controlsRef} zones={zones} positions={renderPositions} minZoom={minZoom} />
         <InteractionWatcher controlsRef={controlsRef} onInteract={() => setHasInteracted(true)} />
         <MapControls
           ref={controlsRef}
@@ -655,7 +884,7 @@ export default function WorldCanvas({ projectName, projectId }: { projectName: s
           enableRotate={false}
           enableDamping
           dampingFactor={0.08}
-          minZoom={12}
+          minZoom={minZoom}
           maxZoom={120}
           zoomSpeed={1}
           target={[0, 0, 2]}
@@ -671,10 +900,50 @@ export default function WorldCanvas({ projectName, projectId }: { projectName: s
           aria-label={`Toggle live project counts (${worldTotal} live records)`}
         >
           <i className={`stats-dot state-${worldFeedsPending ? "loading" : syncState}`} />
-          <span>{projectName}</span>
+          <span>{projects.length > 1 ? `${projects.length} projects` : projectName}</span>
         </button>
         {statsOpen && (
           <div className="stats-popover" role="dialog" aria-label="Live project entity counts">
+            {projects.length > 1 && (
+              <ul className="stats-projects">
+                {compounds.map((compound) => (
+                  <li key={compound.entry.project.id}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setStatsOpen(false);
+                        setSelectedId("hub");
+                        setFocusRequest({
+                          zoneId: "hub",
+                          serial: Date.now(),
+                          projectId: compound.entry.project.id,
+                          target: [
+                            (compound.bounds.minX + compound.bounds.maxX) / 2 + compound.offset[0],
+                            (compound.bounds.minZ + compound.bounds.maxZ) / 2 + compound.offset[1],
+                          ],
+                          fit: [
+                            compound.bounds.maxX - compound.bounds.minX,
+                            compound.bounds.maxZ - compound.bounds.minZ,
+                          ],
+                        });
+                      }}
+                    >
+                      <strong>{compound.entry.project.name}</strong>
+                      <small>
+                        {[
+                          compound.entry.assets?.total,
+                          compound.entry.issues?.total,
+                          compound.entry.rfis?.total,
+                          compound.entry.people?.total,
+                          compound.entry.documents?.total,
+                          compound.entry.forms?.total,
+                        ].reduce<number>((sum, total) => sum + (total ?? 0), 0)} records
+                      </small>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
             <div className="world-metrics">
               <FeedMetric label="Assets" feed={assetFeed} />
               <FeedMetric label="Issues" feed={issueFeed} />
@@ -881,16 +1150,47 @@ function ActivityLog({
   );
 }
 
+/**
+ * The project name over its own compound, so a world holding several of them
+ * can be read at a glance. Hidden for a single-project world, where the HUD
+ * already says which project this is, and inert to the pointer like every other
+ * overlay in the scene.
+ */
+function CompoundLabel({
+  name,
+  bounds,
+  visible,
+}: {
+  name: string;
+  bounds: CompoundBounds;
+  visible: boolean;
+}) {
+  if (!visible) return null;
+  return (
+    <Html
+      position={[(bounds.minX + bounds.maxX) / 2, 3.4, bounds.minZ - 1.4]}
+      center
+      zIndexRange={[20, 0]}
+      style={{ pointerEvents: "none" }}
+    >
+      <span className="compound-label">{name}</span>
+    </Html>
+  );
+}
+
 function CameraFocus({
   request,
   controlsRef,
   zones,
   positions,
+  minZoom,
 }: {
   request?: FocusRequest;
   controlsRef: RefObject<MapControlsImpl | null>;
   zones: WorldZone[];
   positions: ZonePositions;
+  /** The same floor the controls use, so a fit is never clamped past framing. */
+  minZoom: number;
 }) {
   const desiredTarget = useRef(new Vector3());
   const desiredZoom = useRef<number | undefined>(undefined);
@@ -913,13 +1213,13 @@ function CameraFocus({
       const diagonal = Math.max(1, width + depth);
       desiredZoom.current = MathUtils.clamp(
         Math.min(size.width / (diagonal / Math.SQRT2), size.height / (diagonal * .41)) * .78,
-        12,
+        minZoom,
         108,
       );
     } else {
       desiredZoom.current = request.zoom ?? MathUtils.clamp(500 / Math.max(zone.size[0], zone.size[1]), 60, 108);
     }
-  }, [positions, request, size, zones]);
+  }, [minZoom, positions, request, size, zones]);
 
   useEffect(() => {
     const controls = controlsRef.current;
@@ -1040,7 +1340,6 @@ function WorldScene({
   const wireAnchorId = relationshipFocusEntityId ?? selectedIssueId;
   return (
     <>
-      <GroundPlane />
       <DirtPaths paths={paths} />
       <WaterBodies bodies={water} />
       <CompoundWall bounds={bounds} gates={gates} />
@@ -2398,7 +2697,7 @@ function WorldActionSection({ entity, onCompleted }: { entity: WorldEntity; onCo
         entityId: entity.externalId,
         kind: capability.kind,
         value,
-      });
+      }, entity.projectId);
       await onCompleted(result.entity);
       setStep("success");
     } catch (cause) {
@@ -2455,6 +2754,10 @@ function IssueComposer({
   onClose: () => void;
   onCreated: (issue: WorldEntity) => Promise<void>;
 }) {
+  // Subtypes are per project, so the composer works in the project of the
+  // record it was opened on. Opened from the tool bar with no record, it works
+  // in the primary project, which is what the server assumes for a bare request.
+  const composerProjectId = context?.projectId;
   const [options, setOptions] = useState<IssueCreateOptions>();
   const [step, setStep] = useState<"edit" | "confirm" | "sending" | "success">("edit");
   const [title, setTitle] = useState("");
@@ -2467,7 +2770,7 @@ function IssueComposer({
 
   useEffect(() => {
     let active = true;
-    fetchIssueCreateOptions()
+    fetchIssueCreateOptions(composerProjectId)
       .then((result) => {
         if (!active) return;
         setOptions(result);
@@ -2477,7 +2780,7 @@ function IssueComposer({
         if (active) setOptions({ state: "error", subtypes: [], writeScopeGranted: false, error: cause instanceof Error ? cause.message : "Issue settings could not be loaded." });
       });
     return () => { active = false; };
-  }, []);
+  }, [composerProjectId]);
 
   const subtype = options?.subtypes.find((candidate) => candidate.id === issueSubtypeId);
   const assignee = people.find((person) => assignablePersonId(person) === assignedTo);
@@ -2494,7 +2797,7 @@ function IssueComposer({
         issueSubtypeId,
         assignedTo: assignedTo || undefined,
         assignedToType: assignedTo ? "user" : undefined,
-      });
+      }, composerProjectId);
       setCreatedIssue(result.issue);
       await onCreated(result.issue);
       setStep("success");

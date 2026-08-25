@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { ApsApiError } from "@/lib/aps/client";
 import { listWorldDocuments } from "@/lib/aps/documents";
-import { getSession } from "@/lib/session";
+import { getSession, resolveWorldProject } from "@/lib/session";
 import type { DocumentFeed, DocumentFeedState } from "@/world/documents/types";
 
 function failureState(status: number): DocumentFeedState {
@@ -10,13 +10,17 @@ function failureState(status: number): DocumentFeedState {
   return "error";
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   const session = await getSession();
-  if (!session.selectedProject) {
+  // Each compound in the world asks for its own project by ID. An unnamed
+  // request means the primary project, which is how a single-project world and
+  // every pre-existing client keep working unchanged.
+  const project = resolveWorldProject(session, new URL(request.url).searchParams.get("projectId"));
+  if (!project) {
     return NextResponse.json({ error: "Select a project first." }, { status: 409 });
   }
   try {
-    const result = await listWorldDocuments(session.selectedProject);
+    const result = await listWorldDocuments(project);
     const feed: DocumentFeed = {
       state: result.total > 0 ? "available" : "empty",
       ...result,

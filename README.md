@@ -20,6 +20,9 @@ record it came from.
 
 - **Reads** Assets, Issues, Documents, Forms, RFIs, project members and the
   documented relationships between them.
+- **Holds several projects at once.** Pick up to six from a hub and each becomes
+  its own walled compound on the same ground, so a portfolio can be read in one
+  frame. Clicking any record still opens the real thing behind it.
 - **Places** them by their authoritative APS state — an asset's status decides
   which lane of the material yard it stands in, so a status change in Forma
   moves the object in the world.
@@ -132,7 +135,7 @@ persisted. See `src/world/people/identity.ts`.
 ## Verification
 
 ```bash
-npm test        # 167 unit tests
+npm test        # 187 unit tests
 npm run lint
 npm run build
 ```
@@ -165,6 +168,9 @@ build log is in [`TASK_NOTES.md`](TASK_NOTES.md).
   model geometry.
 - **Read-only domains.** People and Documents stay read-only until a documented
   write action exists for them.
+- **Progress is per project.** In a multi-project world, XP and the arrival
+  digest follow the first project selected; the other compounds are read and
+  rendered but do not yet keep their own history.
 
 ## Licence
 

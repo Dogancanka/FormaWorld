@@ -1,6 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import type { WorldProjectRef } from "@/world/multi-project";
 
 const WorldCanvas = dynamic(() => import("./world-canvas"), {
   ssr: false,
@@ -12,6 +13,6 @@ const WorldCanvas = dynamic(() => import("./world-canvas"), {
   ),
 });
 
-export function WorldExperience({ projectName, projectId }: { projectName: string; projectId: string }) {
-  return <WorldCanvas projectName={projectName} projectId={projectId} />;
+export function WorldExperience({ projects }: { projects: WorldProjectRef[] }) {
+  return <WorldCanvas projects={projects} />;
 }
