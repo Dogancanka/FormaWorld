@@ -1,5 +1,11 @@
 # FormaWorld
 
+![The FormaWorld compound: a walled construction site with districts for assets, issues, RFIs, documents, forms and the project crew](docs/world.png)
+
+<sub>The compound with no project loaded. Signing in fills those districts with
+your project's real records — this shot was taken without an Autodesk session,
+so it shows the world's geometry and nothing of anybody's data.</sub>
+
 A live, isometric spatial interface for an Autodesk Forma project. Sign in with
 your Autodesk account, pick a project, and its real Assets, Issues, Documents,
 Forms, RFIs and project members become a construction site you can look at:
