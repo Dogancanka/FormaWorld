@@ -51,7 +51,9 @@ import { buildSnapshot } from "@/world/progression/snapshot";
 import { saveVisitSnapshot, useProgression } from "@/world/progression/store";
 import { useWorldAudio } from "@/world/audio/use-world-audio";
 import { groupDistrictEntities, isUngrouped } from "@/world/entities/grouping";
-import { openWater, pointClearOfWater, waterBodies, type CompoundRect, type WaterBody } from "@/world/water";
+import { openWater, pointClearOfWater, riverCourses, waterBodies, type CompoundRect, type WaterBody } from "@/world/water";
+import { plantForest } from "@/world/scenery/forest";
+import { Forest, Rivers } from "./scenery";
 import type { WorldSnapshotResponse as WorldSnapshot } from "@/app/api/world/snapshot/route";
 import { brickTexture, dirtTexture, grassTexture, shingleTexture } from "@/world/visual/textures";
 import { MathUtils, MeshBasicMaterial, Vector3, type Group, type Mesh } from "three";
@@ -457,6 +459,25 @@ export default function WorldCanvas({ projects }: { projects: WorldProjectRef[] 
     maxZ: compound.bounds.maxZ + compound.offset[1],
   })), [compounds]);
   const meadowWater = useMemo(() => openWater(compoundRects), [compoundRects]);
+  const rivers = useMemo(() => riverCourses(compoundRects), [compoundRects]);
+  /**
+   * The wood. Every plant avoids the compounds, the lakes and the river
+   * channels, and the whole thing is drawn as a handful of instanced meshes —
+   * which is what makes a couple of thousand trees affordable where the old
+   * component-per-prop scatter topped out in the low hundreds.
+   */
+  const forest = useMemo(() => plantForest({
+    compounds: compoundRects,
+    water: [
+      ...meadowWater.map((body) => ({ center: body.center, radius: body.radius })),
+      // A river is sampled as a chain of circles, which is close enough to keep
+      // the banks clear without a second geometry test per plant.
+      ...rivers.flatMap((course) => course.points.map((point) => ({
+        center: point,
+        radius: course.halfWidth + 0.8,
+      }))),
+    ],
+  }), [compoundRects, meadowWater, rivers]);
 
   /**
    * The shadow frustum has to reach every compound. It was fixed at 34, which
@@ -916,7 +937,8 @@ export default function WorldCanvas({ projects }: { projects: WorldProjectRef[] 
             rather than once per project. */}
         <GroundPlane />
         <WaterBodies bodies={meadowWater} />
-        <MeadowProps compounds={compoundRects} water={meadowWater} />
+        <Rivers courses={rivers} />
+        <Forest plants={forest} />
         {compounds.map((compound) => (
           <group
             key={compound.entry.project.id}
@@ -1290,69 +1312,6 @@ function ActivityLog({
  * can be read at a glance. Hidden for a single-project world, where the HUD
  * already says which project this is, and inert to the pointer like every other
  * overlay in the scene.
- */
-/**
- * The meadow between and around the compounds.
- *
- * Laid out once for the whole world so nothing is scattered onto a compound —
- * a per-compound ring could only see its own wall, and reached further than the
- * gap between two projects, which put trees inside a neighbour's districts.
- */
-function MeadowProps({
-  compounds,
-  water,
-}: {
-  compounds: CompoundRect[];
-  water: WaterBody[];
-}) {
-  const spots = useMemo(() => {
-    if (compounds.length === 0) return [];
-    const area = compounds.reduce((total, rect) => ({
-      minX: Math.min(total.minX, rect.minX),
-      maxX: Math.max(total.maxX, rect.maxX),
-      minZ: Math.min(total.minZ, rect.minZ),
-      maxZ: Math.max(total.maxZ, rect.maxZ),
-    }), { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity });
-    const clear = (x: number, z: number) => compounds.every((rect) =>
-      x < rect.minX - 1.2 || x > rect.maxX + 1.2 || z < rect.minZ - 1.2 || z > rect.maxZ + 1.2);
-
-    const result: { position: [number, number]; seed: number }[] = [];
-    const reach = 14;
-    for (let gridX = area.minX - reach; gridX <= area.maxX + reach; gridX += 3.2) {
-      for (let gridZ = area.minZ - reach; gridZ <= area.maxZ + reach; gridZ += 3.2) {
-        const seed = hashText(`meadow:${Math.round(gridX * 10)}:${Math.round(gridZ * 10)}`);
-        if (seed % 2 !== 0) continue;
-        const x = gridX + ((seed % 100) / 100 - .5) * 2.4;
-        const z = gridZ + (((seed >>> 8) % 100) / 100 - .5) * 2.4;
-        if (!clear(x, z)) continue;
-        if (!pointClearOfWater(water, x, z, .8)) continue;
-        result.push({ position: [x, z], seed });
-      }
-    }
-    return result.slice(0, 140);
-  }, [compounds, water]);
-
-  return <>{spots.map(({ position, seed }) => (
-    <GroundProp key={`meadow:${position[0]}:${position[1]}`} position={[position[0], 0, position[1]]} seed={seed} />
-  ))}</>;
-}
-
-/**
- * The whole compound as a click target, so a project behaves like a district:
- * one click selects it and opens its panel, a double-click frames it.
- *
- * It is the lowest thing in the compound and paints nothing, so a district, a
- * record or a wall standing on it is always hit first. The handler acts only
- * when the plate is the *nearest* intersection, which is what keeps it from
- * stealing a click meant for a cone or a crate above it.
- */
-/**
- * One whole project's panel, the counterpart to a district's.
- *
- * A world holding several compounds needs a way to ask "what is this project?"
- * without first picking one of its districts. It reports only what that
- * compound's own feeds returned, so the numbers can never borrow from the
- * project standing next to it, and each district row opens the real district.
  */
 function CompoundDetail({
   compound,

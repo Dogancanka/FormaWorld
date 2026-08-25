@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { compoundBounds, compoundGates, districtPaths } from "./compound";
 import { zonePositions } from "./layout";
-import { WATER_BANK_WIDTH, openWater, pointClearOfWater, waterBankOutline, waterBodies, waterOutline, type CompoundRect } from "./water";
+import { WATER_BANK_WIDTH, openWater, pointClearOfWater, waterBankOutline, waterBodies, waterOutline, riverCourses, type CompoundRect } from "./water";
 import { worldZones } from "./zones";
 
 const zones = worldZones([32.2, 9.4]);
@@ -192,5 +192,48 @@ describe("openWater", () => {
   it("scales its count with the number of compounds rather than flooding them", () => {
     expect(openWater([left]).length).toBeLessThanOrEqual(world.length);
     expect(world.length).toBeLessThanOrEqual(24);
+  });
+});
+
+describe("riverCourses", () => {
+  const left: CompoundRect = { minX: -46, maxX: -4, minZ: -20, maxZ: 20 };
+  const right: CompoundRect = { minX: 4, maxX: 46, minZ: -20, maxZ: 20 };
+  const below: CompoundRect = { minX: -46, maxX: -4, minZ: 34, maxZ: 74 };
+  const rivers = riverCourses([left, right, below]);
+
+  it("cuts a course across the world", () => {
+    expect(rivers.length).toBeGreaterThan(0);
+    for (const river of rivers) {
+      expect(river.points.length).toBeGreaterThan(10);
+      expect(river.halfWidth).toBeGreaterThan(0);
+    }
+  });
+
+  it("never runs through a compound", () => {
+    // Routed down a lane the compounds leave free, with the meander clamped
+    // inside it, so this holds by construction rather than by luck.
+    for (const river of rivers) {
+      for (const [x, z] of river.points) {
+        for (const [name, rect] of [["left", left], ["right", right], ["below", below]] as const) {
+          const hits = x + river.halfWidth > rect.minX && x - river.halfWidth < rect.maxX
+            && z + river.halfWidth > rect.minZ && z - river.halfWidth < rect.maxZ;
+          expect(hits, `${river.id} runs through the ${name} compound`).toBe(false);
+        }
+      }
+    }
+  });
+
+  it("meanders rather than running dead straight", () => {
+    const river = rivers[0];
+    const offsets = river.points.map(([, z]) => z);
+    expect(Math.max(...offsets) - Math.min(...offsets)).toBeGreaterThan(0);
+  });
+
+  it("says nothing about a world with no compounds", () => {
+    expect(riverCourses([])).toEqual([]);
+  });
+
+  it("cuts the same course every time", () => {
+    expect(riverCourses([left, right, below])).toEqual(rivers);
   });
 });

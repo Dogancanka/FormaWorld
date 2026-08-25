@@ -88,8 +88,15 @@ export interface CompoundPlacement {
   offset: [number, number];
 }
 
-/** Open ground between two neighbouring compounds. */
-export const COMPOUND_GAP = 9;
+/**
+ * Open ground between two neighbouring compounds.
+ *
+ * Nine units was enough to keep them apart and nothing else. Widening it gives
+ * the landscape somewhere to be: a river needs roughly six units of clear lane
+ * after its banks, and a wood between two projects reads far better than a
+ * corridor of bare grass.
+ */
+export const COMPOUND_GAP = 15;
 
 /**
  * Lay the compounds out on a row-major grid, widest-first per row.

@@ -778,3 +778,42 @@ Measured against a production build, six projects, 1600x780.
    has suspended, because audio cannot start before a gesture. It would have
    left a returning reader in silence until they toggled twice. The first
    pointer or key event resumes it.
+
+## Phase 34 — A wood worth looking at, and two rivers
+
+1. The ground between compounds was bare because the old scatter was a React
+   component per prop, each owning its own geometries and materials, capped at
+   140 for the whole world. It could not have gone denser without the frame
+   budget going with it. `src/world/scenery/forest.ts` is the wood as flat data
+   and `src/components/world/scenery.tsx` draws each species as one instanced
+   mesh — eight draw calls for a few thousand plants. Same rules as the water:
+   never on a compound, never in the water, deterministic.
+2. Density comes from a low-frequency field rather than an even sprinkle, so the
+   wood has stands and glades. A test measures that: the spread of per-cell
+   counts has to be well above what a uniform scatter would give.
+3. `riverCourses` cuts one or two rivers across the world. They are correct by
+   construction rather than by checking afterwards: a course runs down the
+   middle of a lane the compounds leave free, and its meander is clamped inside
+   that lane, so it cannot reach a wall.
+4. `COMPOUND_GAP` went from 9 to 15. Nine units kept compounds apart and did
+   nothing else; a river needs roughly six units of clear lane after its banks,
+   and a wood between two projects reads far better than a corridor of grass.
+5. Four things found by looking rather than reasoning:
+   - The forest filled one corner of the world and left the rest bare — the same
+     scan-order-versus-quota bug the open water had. Candidates are gathered and
+     thinned by position now.
+   - Both rivers were laid in the open band beyond the outermost compound, which
+     is always the widest lane going. Lanes that actually run *between*
+     compounds are preferred now.
+   - Every river was invisible. The ribbon is a flat strip whose winding depends
+     on which way the course runs, and a single-sided material culled it from
+     above.
+   - The wood in the shadow pass cost about half the frame rate, because the
+     shadow camera covers the whole world and so every instance is drawn again
+     into the depth map. Nothing in the wood casts a shadow; the compounds
+     still do, which is where a shadow carries meaning.
+6. Measured, five projects, production build, on one machine in one sitting so
+   the numbers compare: previous commit without the wood 30fps overview / 40
+   zoomed; this commit with a few thousand plants and two rivers 35 / 46. The
+   landscape is free. (Absolute numbers are lower than the 60 recorded in Phase
+   32 because that machine was quiet; only the comparison means anything.)

@@ -213,3 +213,141 @@ export function waterBankOutline(body: WaterBody, segments = 22): Array<[number,
     return [x / length * grown, z / length * grown] as [number, number];
   });
 }
+
+export interface RiverCourse {
+  id: string;
+  /** Centre line, from one edge of the world to the other. */
+  points: Array<[number, number]>;
+  /** Half-width of the channel, constant along its length. */
+  halfWidth: number;
+  seed: number;
+}
+
+/** A river needs at least this much clear ground to run through. */
+const RIVER_MIN_LANE = 6;
+const RIVER_HALF_WIDTH = 1.15;
+/** How far past the outermost compound a river runs before it leaves frame. */
+const RIVER_OVERSHOOT = 34;
+
+/**
+ * The gaps between compounds, along one axis.
+ *
+ * A river is routed down a lane of open ground rather than being drawn first and
+ * checked afterwards. That way it cannot fail the "never touch a compound" rule
+ * — the lane is defined by the compounds themselves, and the wobble is clamped
+ * inside it.
+ */
+function openLanes(
+  spans: Array<[number, number]>,
+  from: number,
+  to: number,
+  clearance: number,
+): Array<[number, number]> {
+  const blocked = spans
+    .map(([start, end]) => [start - clearance, end + clearance] as [number, number])
+    .sort((left, right) => left[0] - right[0]);
+  const lanes: Array<[number, number]> = [];
+  let cursor = from;
+  for (const [start, end] of blocked) {
+    if (start > cursor) lanes.push([cursor, start]);
+    cursor = Math.max(cursor, end);
+  }
+  if (cursor < to) lanes.push([cursor, to]);
+  return lanes.filter(([start, end]) => end - start >= RIVER_MIN_LANE);
+}
+
+/**
+ * One or two rivers crossing the world through open ground.
+ *
+ * Deterministic, and correct by construction: each course runs along the middle
+ * of a lane the compounds leave free, and its meander is clamped to stay inside
+ * that lane. There is no candidate-and-reject step, so a river can never end up
+ * cutting through a project.
+ */
+export function riverCourses(compounds: CompoundRect[]): RiverCourse[] {
+  if (compounds.length === 0) return [];
+  const area = compounds.reduce((total, rect) => ({
+    minX: Math.min(total.minX, rect.minX),
+    maxX: Math.max(total.maxX, rect.maxX),
+    minZ: Math.min(total.minZ, rect.minZ),
+    maxZ: Math.max(total.maxZ, rect.maxZ),
+  }), { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity });
+
+  const margin = RIVER_HALF_WIDTH + 0.9;
+  const courses: RiverCourse[] = [];
+
+  // A river running along X sits in a lane of free Z, and the other way round.
+  const horizontalLanes = openLanes(
+    compounds.map((rect) => [rect.minZ, rect.maxZ] as [number, number]),
+    area.minZ - RIVER_OVERSHOOT,
+    area.maxZ + RIVER_OVERSHOOT,
+    margin,
+  );
+  const verticalLanes = openLanes(
+    compounds.map((rect) => [rect.minX, rect.maxX] as [number, number]),
+    area.minX - RIVER_OVERSHOOT,
+    area.maxX + RIVER_OVERSHOOT,
+    margin,
+  );
+
+  /**
+   * The widest lane, preferring one that actually runs between the compounds.
+   *
+   * The open ground beyond the outermost compound is always the widest lane
+   * going, so picking on width alone put both rivers out at the edge of the
+   * world where nobody would ever see them. A gap between two projects is the
+   * interesting place for a river, so those are considered first.
+   */
+  const widest = (lanes: Array<[number, number]>, low: number, high: number) => {
+    const byWidth = [...lanes].sort((left, right) => (right[1] - right[0]) - (left[1] - left[0]));
+    const between = byWidth.filter((lane) => {
+      const centre = (lane[0] + lane[1]) / 2;
+      return centre > low && centre < high;
+    });
+    return between[0] ?? byWidth[0];
+  };
+
+  const addCourse = (
+    id: string,
+    lane: [number, number] | undefined,
+    along: "x" | "z",
+  ) => {
+    if (!lane) return;
+    const centre = (lane[0] + lane[1]) / 2;
+    // The meander can never leave the lane, so the channel cannot reach a wall.
+    const sway = Math.max(0, (lane[1] - lane[0]) / 2 - margin);
+    const seed = Math.round(Math.abs(centre) * 100) % 997;
+    const start = along === "x" ? area.minX - RIVER_OVERSHOOT : area.minZ - RIVER_OVERSHOOT;
+    const end = along === "x" ? area.maxX + RIVER_OVERSHOOT : area.maxZ + RIVER_OVERSHOOT;
+    const steps = 48;
+    const points: Array<[number, number]> = Array.from({ length: steps + 1 }, (_, index) => {
+      const t = index / steps;
+      const distance = start + (end - start) * t;
+      const offset = centre
+        + Math.sin(t * Math.PI * 2.4 + seed) * sway * 0.62
+        + Math.sin(t * Math.PI * 5.1 + seed * 0.7) * sway * 0.22;
+      return along === "x" ? [distance, offset] : [offset, distance];
+    });
+    courses.push({ id, points, halfWidth: RIVER_HALF_WIDTH, seed });
+  };
+
+  addCourse("river-x", widest(horizontalLanes, area.minZ, area.maxZ), "x");
+  // A second river only if there is a genuinely separate lane for it to use.
+  const verticalLane = widest(verticalLanes, area.minX, area.maxX);
+  if (verticalLane && verticalLane[1] - verticalLane[0] >= RIVER_MIN_LANE) {
+    addCourse("river-z", verticalLane, "z");
+  }
+  return courses;
+}
+
+/** True when a point is clear of every river channel, for scattering on dry land. */
+export function pointClearOfRivers(
+  courses: RiverCourse[],
+  x: number,
+  z: number,
+  clearance = 0.6,
+): boolean {
+  return courses.every((course) => course.points.every(
+    ([pointX, pointZ]) => Math.hypot(pointX - x, pointZ - z) > course.halfWidth + clearance,
+  ));
+}
