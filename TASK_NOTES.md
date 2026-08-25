@@ -844,3 +844,28 @@ Measured against a production build, six projects, 1600x780.
    overview and 49 zoomed, against 35 / 46 for the smaller landscape and 30 / 40
    for the commit before any of it. A world several times the area costs nothing
    measurable, which is what the two-band sowing and the instancing are for.
+
+## Phase 36 — A landscape that knows when to stop
+
+1. The arrival digest could be dismissed and never brought back. It is the one
+   panel that answers "what happened last", and closing it once removed it for
+   the visit. A toolbar button re-opens it whenever there are unanswered lines,
+   labelled for which digest it is — "What happened" against a stored snapshot,
+   "On arrival" on a first visit. When it is genuinely empty nothing is shown,
+   because nothing changed is a real answer and a panel saying so is noise.
+2. Panning could take the camera clean off the world. Sizing the ground to the
+   compounds fixed the *default* view but not a reader who dragged; past the
+   scenery they found bare grass and then the edge of the terrain. `CameraBounds`
+   clamps the controls target to the compounds plus 42 units, moving the camera
+   with it so the pan stops rather than the view swinging round. The bound grows
+   with the world: adding a project widens what can be reached, which is the
+   limit that was asked for.
+3. Two rivers, one along each axis, put a crossroads of water through the middle
+   of the world. Rivers do not cross. The wider of the two lanes wins now and
+   the other is left dry.
+4. Open water was two dozen ponds of roughly equal size, which reads as a rash
+   rather than as a landscape. One lake and at most four ponds now. The lake
+   sits about 22 units from the nearest wall — a first attempt put it at the
+   candidate *furthest* from every compound, which parked it at the edge of the
+   reach where the fog swallowed it and the world looked as though it had no
+   lake at all.

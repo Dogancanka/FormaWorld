@@ -27,11 +27,22 @@ const WALL_CLEARANCE = 0.9;
 const SAMPLE_STEP = 4.0;
 const INSIDE_STEP = 1.5;
 const INSIDE_RADIUS: [number, number] = [1.0, 1.7];
-const OUTSIDE_RADIUS: [number, number] = [2.6, 5.2];
+const OUTSIDE_RADIUS: [number, number] = [2.4, 4.2];
+/**
+ * One proper lake, and only a handful of ponds beside it.
+ *
+ * Two dozen blobs of roughly equal size read as a rash rather than as water.
+ * A landscape wants one thing big enough to be a landmark and a few small ones
+ * for company, so the first body kept is grown into a lake and the rest are
+ * capped hard.
+ */
+const LAKE_RADIUS = 9.5;
+const MAX_PONDS = 4;
+/** How far from the nearest wall the lake wants to sit. */
+const LAKE_STANDOFF = 22;
 /** How far past the wall open water may still be placed. */
 const OUTSIDE_REACH = 24;
 const MAX_INSIDE = 3;
-const MAX_OUTSIDE = 6;
 
 function hash(x: number, z: number): number {
   let value = 2166136261;
@@ -159,14 +170,31 @@ export function openWater(compounds: CompoundRect[], reach = OUTSIDE_REACH): Wat
   // the whole meadow, and is as deterministic as the scan it replaces.
   candidates.sort((left, right) => left.seed - right.seed || left.center[0] - right.center[0]);
 
-  const limit = MAX_OUTSIDE * Math.min(compounds.length, 4);
+  // The lake sits a little way out — far enough from a wall not to crowd a
+  // project, near enough to still be part of the view. Taking the candidate
+  // *furthest* from everything put it out at the edge of the reach, where the
+  // fog swallowed it and the world looked as though it had no lake at all.
+  const distanceToCompounds = (candidate: WaterBody) => Math.min(...compounds.map((rect) => {
+    const dx = Math.max(rect.minX - candidate.center[0], 0, candidate.center[0] - rect.maxX);
+    const dz = Math.max(rect.minZ - candidate.center[1], 0, candidate.center[1] - rect.maxZ);
+    return Math.hypot(dx, dz);
+  }));
+  const lakeSite = [...candidates]
+    .filter((candidate) => compounds.every((rect) => !touchesCompound(rect, candidate.center[0], candidate.center[1], LAKE_RADIUS)))
+    .sort((left, right) =>
+      Math.abs(distanceToCompounds(left) - LAKE_STANDOFF)
+      - Math.abs(distanceToCompounds(right) - LAKE_STANDOFF)
+      || left.seed - right.seed)[0];
+
   const bodies: WaterBody[] = [];
+  if (lakeSite) bodies.push({ ...lakeSite, radius: LAKE_RADIUS, id: "lake" });
+
   for (const candidate of candidates) {
-    if (bodies.length >= limit) break;
+    if (bodies.length > MAX_PONDS) break;
     const clash = bodies.some((body) => Math.hypot(
       body.center[0] - candidate.center[0],
       body.center[1] - candidate.center[1],
-    ) < body.radius + candidate.radius + 4);
+    ) < body.radius + candidate.radius + 6);
     if (clash) continue;
     bodies.push({ ...candidate, id: `water-${bodies.length}` });
   }
@@ -337,12 +365,19 @@ export function riverCourses(compounds: CompoundRect[], overshoot = RIVER_OVERSH
     courses.push({ id, points, halfWidth: RIVER_HALF_WIDTH, seed });
   };
 
-  addCourse("river-x", widest(horizontalLanes, area.minZ, area.maxZ), "x");
-  // A second river only if there is a genuinely separate lane for it to use.
-  const verticalLane = widest(verticalLanes, area.minX, area.maxX);
-  if (verticalLane && verticalLane[1] - verticalLane[0] >= RIVER_MIN_LANE) {
-    addCourse("river-z", verticalLane, "z");
-  }
+  /**
+   * One river, down whichever axis has the better lane.
+   *
+   * Cutting one along each axis put a crossroads of water through the middle of
+   * the world. Rivers do not cross; the shape said "decoration" rather than
+   * "landscape", so the wider of the two lanes wins and the other is left dry.
+   */
+  const horizontal = widest(horizontalLanes, area.minZ, area.maxZ);
+  const vertical = widest(verticalLanes, area.minX, area.maxX);
+  const horizontalWidth = horizontal ? horizontal[1] - horizontal[0] : 0;
+  const verticalWidth = vertical ? vertical[1] - vertical[0] : 0;
+  if (horizontalWidth >= verticalWidth) addCourse("river", horizontal, "x");
+  else addCourse("river", vertical, "z");
   return courses;
 }
 

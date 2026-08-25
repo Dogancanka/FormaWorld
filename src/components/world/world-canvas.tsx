@@ -84,6 +84,14 @@ type SyncState = "idle" | "syncing" | "current" | "partial_error";
  */
 const WORLD_REACH = 130;
 
+/**
+ * How far past the compounds the camera may be panned.
+ *
+ * Comfortably inside `WORLD_REACH`, so whatever the reader pans to still has
+ * wood and water on it and the terrain's edge stays behind the fog.
+ */
+const PAN_MARGIN = 42;
+
 // Shapes the merge falls back to. A merged feed only ever borrows the fields a
 // domain does not aggregate, so these are never shown as data.
 const EMPTY_ASSET_FEED: AssetFeed = { state: "empty", entities: [], total: 0, limit: 25, statuses: [], categories: [] };
@@ -1038,6 +1046,7 @@ export default function WorldCanvas({ projects }: { projects: WorldProjectRef[] 
           </group>
         ))}
         <CameraFocus request={focusRequest} controlsRef={controlsRef} zones={zones} positions={renderPositions} minZoom={minZoom} />
+        <CameraBounds controlsRef={controlsRef} bounds={worldBounds} margin={PAN_MARGIN} />
         <InteractionWatcher controlsRef={controlsRef} onInteract={() => setHasInteracted(true)} />
         <MapControls
           ref={controlsRef}
@@ -1120,6 +1129,16 @@ export default function WorldCanvas({ projects }: { projects: WorldProjectRef[] 
           <button className={`sync-badge sync-${syncState}`} type="button" onClick={() => void refreshWorld("manual")} disabled={syncState === "syncing"} title="Reconcile all world data with APS now">
             <i /> {syncState === "syncing" ? "Syncing…" : lastSyncedAt ? `Synced ${new Date(lastSyncedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "Waiting for APS"}
           </button>
+          {awayLog.length > 0 && !awayLogOpen && (
+            <button
+              className="toolbar-button digest-reopen"
+              type="button"
+              onClick={() => setAwayLogOpen(true)}
+              title={digestIsArrival ? "Show what you are arriving into" : "Show what happened while you were away"}
+            >
+              {digestIsArrival ? "On arrival" : "What happened"} <b>{awayLog.length}</b>
+            </button>
+          )}
           <button
             className={`toolbar-button sound-toggle${audio.enabled ? " on" : ""}`}
             type="button"
@@ -1555,6 +1574,42 @@ function InteractionWatcher({
     controls.addEventListener("start", onInteract);
     return () => controls.removeEventListener("start", onInteract);
   }, [controlsRef, onInteract]);
+  return null;
+}
+
+/**
+ * Keeps the camera over the world.
+ *
+ * `MapControls` will happily pan to anywhere on the ground plane, and once the
+ * target leaves the world the reader is looking at bare grass and then at the
+ * edge of the terrain itself. The target is clamped to the compounds plus a
+ * margin of open country, so there is always landscape in frame and the edge
+ * stays behind the fog. The bound grows with the world: adding a project widens
+ * what can be reached.
+ */
+function CameraBounds({
+  controlsRef,
+  bounds,
+  margin,
+}: {
+  controlsRef: RefObject<MapControlsImpl | null>;
+  bounds: CompoundBounds;
+  margin: number;
+}) {
+  useFrame(() => {
+    const controls = controlsRef.current;
+    if (!controls) return;
+    const target = controls.target;
+    const x = MathUtils.clamp(target.x, bounds.minX - margin, bounds.maxX + margin);
+    const z = MathUtils.clamp(target.z, bounds.minZ - margin, bounds.maxZ + margin);
+    if (x === target.x && z === target.z) return;
+    // Move the camera with the target, or clamping the target alone swings the
+    // view round instead of stopping the pan.
+    controls.object.position.x += x - target.x;
+    controls.object.position.z += z - target.z;
+    target.x = x;
+    target.z = z;
+  });
   return null;
 }
 

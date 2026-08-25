@@ -189,9 +189,28 @@ describe("openWater", () => {
     expect(openWater([])).toEqual([]);
   });
 
-  it("scales its count with the number of compounds rather than flooding them", () => {
-    expect(openWater([left]).length).toBeLessThanOrEqual(world.length);
-    expect(world.length).toBeLessThanOrEqual(24);
+  it("gives the world one lake and only a few ponds", () => {
+    // Two dozen blobs of roughly equal size read as a rash rather than water.
+    expect(world.length).toBeLessThanOrEqual(5);
+    const lake = world.find((body) => body.id === "lake");
+    expect(lake).toBeDefined();
+    for (const body of world) {
+      if (body.id === "lake") continue;
+      expect(body.radius).toBeLessThan(lake!.radius);
+    }
+  });
+
+  it("puts the lake a little way out, not off in the fog", () => {
+    // Far enough from a wall not to crowd a project, near enough to still be
+    // part of the view. Taking the furthest candidate hid it in the haze.
+    const lake = world.find((body) => body.id === "lake")!;
+    const nearest = Math.min(...[left, right, below].map((rect) => {
+      const dx = Math.max(rect.minX - lake.center[0], 0, lake.center[0] - rect.maxX);
+      const dz = Math.max(rect.minZ - lake.center[1], 0, lake.center[1] - rect.maxZ);
+      return Math.hypot(dx, dz);
+    }));
+    expect(nearest).toBeGreaterThan(lake.radius);
+    expect(nearest).toBeLessThan(40);
   });
 });
 
@@ -201,8 +220,10 @@ describe("riverCourses", () => {
   const below: CompoundRect = { minX: -46, maxX: -4, minZ: 34, maxZ: 74 };
   const rivers = riverCourses([left, right, below]);
 
-  it("cuts a course across the world", () => {
-    expect(rivers.length).toBeGreaterThan(0);
+  it("cuts exactly one course across the world", () => {
+    // Two rivers put a crossroads of water through the middle of the world.
+    // Rivers do not cross.
+    expect(rivers).toHaveLength(1);
     for (const river of rivers) {
       expect(river.points.length).toBeGreaterThan(10);
       expect(river.halfWidth).toBeGreaterThan(0);

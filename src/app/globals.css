@@ -775,3 +775,8 @@ h1 { margin: 18px 0; font-family: var(--font-satoshi), ui-sans-serif, sans-serif
    that has to read as active. */
 .sound-toggle { font-size: 13px; line-height: 1; }
 .sound-toggle.on { background: rgba(34, 105, 88, .14); color: var(--green-dark); }
+
+/* Bring the arrival digest back after it has been dismissed. Without this the
+   panel could only ever be closed once per visit. */
+.digest-reopen { display: inline-flex; align-items: center; gap: 7px; width: auto; padding: 0 11px; font-size: 11px; font-weight: 800; letter-spacing: .02em; white-space: nowrap; }
+.digest-reopen b { min-width: 17px; padding: 2px 5px; border-radius: 9px; background: var(--green); color: white; font-size: 10px; text-align: center; }
